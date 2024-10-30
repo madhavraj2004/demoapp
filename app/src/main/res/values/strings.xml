@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">demoapp</string>
+    <string name="title_home">Home</string>
+    <string name="title_dashboard">Dashboard</string>
+    <string name="title_notifications">Notifications</string>
+    <string name="title_Map" />
+    <string name="title_Audio" />
+    <string name="title_bluetooth" />
+    <string name="title_Bluetooth" />
+</resources>

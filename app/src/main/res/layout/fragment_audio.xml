@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- WebView Background -->
+    <WebView
+        android:id="@+id/webview_chatbot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" /> <!-- Set visibility to 'gone' if you don't want it visible initially -->
+
+    <!-- Main LinearLayout for Vertical Stacking -->
+
+    <!-- Floating Action Button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="634dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginTop="-2dp"
+        android:layout_marginBottom="99dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Smart Assistant Toggle -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"/>
+
+        <!-- Microphone Icon -->
+        <ImageView
+            android:id="@+id/microphone_icon"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_marginTop="16dp"
+            android:contentDescription="Microphone Icon"
+            android:src="@drawable/ic_microphone" />
+
+        <!-- Tap to Speak Button -->
+        <Button
+            android:id="@+id/button_tap_to_speak"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="#2196F3"
+            android:text="Tap to Speak"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp" />
+
+        <!-- Speech to Text Input -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/edittext_speech_to_text"
+                android:layout_width="180dp"
+                android:layout_height="wrap_content"
+                android:background="@android:color/white"
+                android:hint="Speech to Text"
+                android:padding="8dp" />
+
+            <ImageButton
+                android:id="@+id/button_speech_to_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:contentDescription="Speech to Text Button"
+                android:padding="8dp"
+                android:src="@drawable/ic_send" />
+        </LinearLayout>
+    </LinearLayout>
+
+</RelativeLayout>
