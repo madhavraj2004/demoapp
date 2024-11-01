@@ -13,7 +13,7 @@
 
     <fragment
         android:id="@+id/navigation_audio"
-        android:name="com.example.demoapp.ui.AudioFragment"
+        android:name="com.example.demoapp.ui.Audio.AudioFragment"
         android:label="@string/title_Audio"
         tools:layout="@layout/fragment_audio" />
 

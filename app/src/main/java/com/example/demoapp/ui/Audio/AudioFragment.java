@@ -1,135 +1,156 @@
 package com.example.demoapp.ui.Audio;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.AudioFormat;
-import android.media.AudioRecord;
-import android.media.MediaRecorder;
 import android.os.Bundle;
-import android.os.Environment;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 import com.example.demoapp.R;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Locale;
 
 public class AudioFragment extends Fragment {
 
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
     private boolean permissionToRecordAccepted = false;
-    private String[] permissions = {Manifest.permission.RECORD_AUDIO, Manifest.permission.WRITE_EXTERNAL_STORAGE};
+    private String[] permissions = {Manifest.permission.RECORD_AUDIO};
 
-    private Button buttonTapToSpeak;
-    private EditText editTextSpeechToText;
-    private ImageView microphoneIcon;
-    private boolean isRecording = false;
-    private AudioRecord audioRecord;
-    private File audioFile;
+    private Button tapToSpeakButton;
+    private TextView speechToTextView;
+    private SpeechRecognizer speechRecognizer;
 
     @Override
-    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // Check for audio recording permission on creation
+        checkPermissions();
+
+        // Initialize the speech recognizer
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                             Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_audio, container, false);
 
-        buttonTapToSpeak = view.findViewById(R.id.button_tap_to_speak);
-        editTextSpeechToText = view.findViewById(R.id.edittext_speech_to_text);
-        microphoneIcon = view.findViewById(R.id.microphone_icon);
+        tapToSpeakButton = view.findViewById(R.id.button_tap_to_speak);
+        speechToTextView = view.findViewById(R.id.edittext_speech_to_text);
 
-        // Request permissions
-        ActivityCompat.requestPermissions(getActivity(), permissions, REQUEST_RECORD_AUDIO_PERMISSION);
-
-        buttonTapToSpeak.setOnClickListener(v -> {
+        tapToSpeakButton.setOnClickListener(v -> {
             if (permissionToRecordAccepted) {
-                if (isRecording) {
-                    stopRecording();
-                } else {
-                    startRecording();
-                }
+                // Start listening for speech input
+                startListening();
             } else {
-                Toast.makeText(getContext(), "Permission to record not granted", Toast.LENGTH_SHORT).show();
+                Toast.makeText(getContext(), "Recording permission is required", Toast.LENGTH_SHORT).show();
+                requestAudioPermission();
             }
         });
 
         return view;
     }
 
-    private void startRecording() {
-        isRecording = true;
-        buttonTapToSpeak.setText("Stop Recording");
-        microphoneIcon.setImageResource(R.drawable.ic_microphone_active); // Change the icon
+    private void checkPermissions() {
+        permissionToRecordAccepted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
 
-        int bufferSize = AudioRecord.getMinBufferSize(
-                MediaRecorder.AudioSource.MIC,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT);
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
-            return;
+        if (!permissionToRecordAccepted) {
+            // Request permissions if not granted
+            requestAudioPermission();
         }
-        audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC,
-                44100,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize);
-
-        audioFile = new File(Environment.getExternalStorageDirectory(), "recorded_audio.wav");
-
-        audioRecord.startRecording();
-        byte[] audioData = new byte[bufferSize];
-
-        new Thread(() -> {
-            try (FileOutputStream outputStream = new FileOutputStream(audioFile)) {
-                while (isRecording) {
-                    int read = audioRecord.read(audioData, 0, audioData.length);
-                    if (read > 0) {
-                        outputStream.write(audioData, 0, read);
-                    }
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }).start();
     }
 
-    private void stopRecording() {
-        isRecording = false;
-        buttonTapToSpeak.setText("Tap to Speak");
-        microphoneIcon.setImageResource(R.drawable.ic_microphone); // Reset the icon
-
-        if (audioRecord != null) {
-            audioRecord.stop();
-            audioRecord.release();
-            audioRecord = null;
-        }
-
-        Toast.makeText(getContext(), "Audio recorded: " + audioFile.getAbsolutePath(), Toast.LENGTH_SHORT).show();
+    private void requestAudioPermission() {
+        ActivityCompat.requestPermissions(requireActivity(), permissions, REQUEST_RECORD_AUDIO_PERMISSION);
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        switch (requestCode) {
-            case REQUEST_RECORD_AUDIO_PERMISSION:
-                permissionToRecordAccepted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-                break;
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+            permissionToRecordAccepted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (!permissionToRecordAccepted) {
+                Toast.makeText(getContext(), "Recording permission denied", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void startListening() {
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now...");
+
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle params) {
+                Toast.makeText(getContext(), "Listening...", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onBeginningOfSpeech() { }
+
+            @Override
+            public void onRmsChanged(float rmsdB) { }
+
+            @Override
+            public void onBufferReceived(byte[] buffer) { }
+
+            @Override
+            public void onEndOfSpeech() {
+                Toast.makeText(getContext(), "Processing...", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onError(int error) {
+                Toast.makeText(getContext(), "Error recognizing speech", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (matches != null && !matches.isEmpty()) {
+                    speechToTextView.setText(matches.get(0));
+                }
+            }
+
+            @Override
+            public void onPartialResults(Bundle partialResults) { }
+
+            @Override
+            public void onEvent(int eventType, Bundle params) { }
+        });
+
+        speechRecognizer.startListening(intent);
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        if (speechRecognizer != null) {
+            speechRecognizer.stopListening();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (speechRecognizer != null) {
+            speechRecognizer.destroy();
         }
     }
 }

@@ -66,7 +66,7 @@
                 android:layout_height="wrap_content"
                 android:background="@android:color/white"
                 android:hint="Speech to Text"
-                android:padding="8dp" />
+                android:padding="28dp" />
 
             <ImageButton
                 android:id="@+id/button_speech_to_text"
@@ -74,7 +74,7 @@
                 android:layout_height="wrap_content"
                 android:background="?attr/selectableItemBackground"
                 android:contentDescription="Speech to Text Button"
-                android:padding="8dp"
+                android:padding="18dp"
                 android:src="@drawable/ic_send" />
         </LinearLayout>
     </LinearLayout>
