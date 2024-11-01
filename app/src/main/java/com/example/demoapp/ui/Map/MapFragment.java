@@ -18,6 +18,8 @@ import org.osmdroid.library.BuildConfig;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
+import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
+import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
 import com.example.demoapp.R;
 
@@ -25,6 +27,7 @@ public class MapFragment extends Fragment {
 
     private static final int REQUEST_PERMISSIONS_REQUEST_CODE = 1;
     private MapView mapView;
+    private MyLocationNewOverlay myLocationOverlay;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -50,6 +53,13 @@ public class MapFragment extends Fragment {
         startMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
         startMarker.setTitle("Eiffel Tower");
         mapView.getOverlays().add(startMarker);
+
+        // Initialize MyLocationNewOverlay to show current location
+        GpsMyLocationProvider locationProvider = new GpsMyLocationProvider(requireContext());
+        myLocationOverlay = new MyLocationNewOverlay(locationProvider, mapView);
+        myLocationOverlay.enableMyLocation();
+        myLocationOverlay.enableFollowLocation();  // Optional: centers the map on the user's location
+        mapView.getOverlays().add(myLocationOverlay);
 
         // Request permissions if necessary
         requestPermissionsIfNecessary(new String[] {
@@ -79,6 +89,10 @@ public class MapFragment extends Fragment {
                 }
             }
             // Permissions granted, proceed with map initialization if required
+            if (myLocationOverlay != null) {
+                myLocationOverlay.enableMyLocation();
+                myLocationOverlay.enableFollowLocation();
+            }
         }
     }
 
@@ -86,11 +100,17 @@ public class MapFragment extends Fragment {
     public void onResume() {
         super.onResume();
         mapView.onResume(); // Needed for compass, my location overlays, etc.
+        if (myLocationOverlay != null) {
+            myLocationOverlay.enableMyLocation(); // Re-enable location overlay
+        }
     }
 
     @Override
     public void onPause() {
         super.onPause();
         mapView.onPause(); // Needed for compass, my location overlays, etc.
+        if (myLocationOverlay != null) {
+            myLocationOverlay.disableMyLocation(); // Disable location overlay when paused
+        }
     }
 }

@@ -10,6 +10,9 @@ import android.speech.SpeechRecognizer;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -19,7 +22,9 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
+
 import com.example.demoapp.R;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import java.util.ArrayList;
 import java.util.Locale;
@@ -33,14 +38,12 @@ public class AudioFragment extends Fragment {
     private Button tapToSpeakButton;
     private TextView speechToTextView;
     private SpeechRecognizer speechRecognizer;
+    private WebView webView;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Check for audio recording permission on creation
         checkPermissions();
-
-        // Initialize the speech recognizer
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
     }
 
@@ -52,9 +55,15 @@ public class AudioFragment extends Fragment {
         tapToSpeakButton = view.findViewById(R.id.button_tap_to_speak);
         speechToTextView = view.findViewById(R.id.edittext_speech_to_text);
 
+        // Initialize WebView and hide it initially
+        webView = view.findViewById(R.id.webview_chatbot); // Add a WebView in XML layout if not done already
+        webView.setWebViewClient(new WebViewClient());
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webView.setVisibility(View.GONE); // Initially hide the WebView
+
         tapToSpeakButton.setOnClickListener(v -> {
             if (permissionToRecordAccepted) {
-                // Start listening for speech input
                 startListening();
             } else {
                 Toast.makeText(getContext(), "Recording permission is required", Toast.LENGTH_SHORT).show();
@@ -62,14 +71,13 @@ public class AudioFragment extends Fragment {
             }
         });
 
+
         return view;
     }
 
     private void checkPermissions() {
         permissionToRecordAccepted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-
         if (!permissionToRecordAccepted) {
-            // Request permissions if not granted
             requestAudioPermission();
         }
     }
