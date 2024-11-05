@@ -3,15 +3,15 @@ package com.example.demoapp.ui.Map;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
-
-import android.view.LayoutInflater;
-import android.view.View;
-import android.view.ViewGroup;
 
 import org.osmdroid.config.Configuration;
 import org.osmdroid.library.BuildConfig;
@@ -20,6 +20,10 @@ import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 import com.example.demoapp.R;
 
@@ -31,7 +35,6 @@ public class MapFragment extends Fragment {
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        // Inflate the layout for this fragment
         View rootView = inflater.inflate(R.layout.fragment_map, container, false);
 
         // Set up osmdroid configuration
@@ -58,7 +61,7 @@ public class MapFragment extends Fragment {
         GpsMyLocationProvider locationProvider = new GpsMyLocationProvider(requireContext());
         myLocationOverlay = new MyLocationNewOverlay(locationProvider, mapView);
         myLocationOverlay.enableMyLocation();
-        myLocationOverlay.enableFollowLocation();  // Optional: centers the map on the user's location
+        myLocationOverlay.enableFollowLocation();
         mapView.getOverlays().add(myLocationOverlay);
 
         // Request permissions if necessary
@@ -66,6 +69,19 @@ public class MapFragment extends Fragment {
                 Manifest.permission.WRITE_EXTERNAL_STORAGE,
                 Manifest.permission.ACCESS_FINE_LOCATION
         });
+
+        // Set up a click listener on the map
+        mapView.setOnTouchListener((v, event) -> {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+                GeoPoint clickedPoint = (GeoPoint) mapView.getProjection().fromPixels((int) event.getX(), (int) event.getY());
+                if (clickedPoint != null) {
+                    displayLocationInfo(clickedPoint);
+                }
+                return true;
+            }
+            return false;
+        });
+
 
         return rootView;
     }
@@ -79,16 +95,45 @@ public class MapFragment extends Fragment {
         }
     }
 
+    private Marker clickMarker; // Declare at the class level
+
+    private void displayLocationInfo(GeoPoint point) {
+        double latitude = point.getLatitude();
+        double longitude = point.getLongitude();
+        String currentTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
+
+        // Displaying the information
+        String message = "Lat: " + latitude + ", Lon: " + longitude + "\nTime: " + currentTime;
+        Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show();
+
+        // Remove the previous marker if it exists
+        if (clickMarker != null) {
+            mapView.getOverlays().remove(clickMarker);
+            mapView.invalidate(); // Refresh the map to remove the marker
+        }
+
+        // Add a new marker at the clicked location
+        clickMarker = new Marker(mapView);
+        clickMarker.setPosition(point);
+        clickMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
+        clickMarker.setTitle("Clicked Location");
+        clickMarker.setSnippet(message);
+        mapView.getOverlays().add(clickMarker);
+        clickMarker.showInfoWindow();
+
+        // Smoothly pan to the clicked location
+        mapView.getController().animateTo(point);
+    }
+
+
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
             for (int result : grantResults) {
                 if (result != PackageManager.PERMISSION_GRANTED) {
-                    // Permission denied
                     return;
                 }
             }
-            // Permissions granted, proceed with map initialization if required
             if (myLocationOverlay != null) {
                 myLocationOverlay.enableMyLocation();
                 myLocationOverlay.enableFollowLocation();
@@ -99,18 +144,18 @@ public class MapFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
-        mapView.onResume(); // Needed for compass, my location overlays, etc.
+        mapView.onResume();
         if (myLocationOverlay != null) {
-            myLocationOverlay.enableMyLocation(); // Re-enable location overlay
+            myLocationOverlay.enableMyLocation();
         }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        mapView.onPause(); // Needed for compass, my location overlays, etc.
+        mapView.onPause();
         if (myLocationOverlay != null) {
-            myLocationOverlay.disableMyLocation(); // Disable location overlay when paused
+            myLocationOverlay.disableMyLocation();
         }
     }
 }
