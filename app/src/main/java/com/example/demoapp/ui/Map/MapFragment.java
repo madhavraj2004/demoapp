@@ -158,4 +158,9 @@ public class MapFragment extends Fragment {
             myLocationOverlay.disableMyLocation();
         }
     }
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        mapView.onDetach(); // Clean up resources
+    }
 }
