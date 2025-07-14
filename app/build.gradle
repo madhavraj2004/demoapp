@@ -47,4 +47,6 @@ dependencies {
     implementation 'com.polidea.rxandroidble3:rxandroidble:1.18.1'
     implementation 'io.reactivex.rxjava3:rxandroid:3.0.1'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'com.google.android.gms:play-services-location:21.0.1'
+
 }

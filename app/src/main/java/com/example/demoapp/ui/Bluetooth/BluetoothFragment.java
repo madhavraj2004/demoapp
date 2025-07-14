@@ -37,7 +37,7 @@ public class BluetoothFragment extends Fragment {
 
     private static final int PERMISSION_REQUEST_CODE = 1;
     private static final String CHARACTERISTIC_UUID = "0000fef4-0000-1000-8000-00805f9b34fb";
-    private static final String TARGET_DEVICE_MAC = "7C:DF:A1:EE:D4:96";
+    private static final String TARGET_DEVICE_MAC = "30:30:F9:77:05:32";
     private TextView statusTextView;
     private TextView receivedDataTextView;
 

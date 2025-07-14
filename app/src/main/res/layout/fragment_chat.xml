@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/chatFragmentLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F5F5">
+
+    <!-- Chat Messages -->
+
+    <!-- Message Input Area -->
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/chatRecyclerView"
+        android:layout_width="344dp"
+        android:layout_height="486dp"
+        android:clipToPadding="false"
+        android:padding="12dp"
+        android:scrollbars="vertical"
+        app:layout_constraintBottom_toTopOf="@+id/messageLayout"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.437"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.051" />
+
+    <LinearLayout
+        android:id="@+id/messageLayout"
+        android:layout_width="343dp"
+        android:layout_height="0dp"
+        android:layout_marginBottom="80dp"
+        android:background="#FFFFFF"
+        android:elevation="4dp"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <EditText
+            android:id="@+id/messageEditText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/edittext_background"
+            android:hint="Type a message"
+            android:inputType="textMultiLine"
+            android:maxLines="4"
+            android:minHeight="48dp"
+            android:padding="10dp"
+            android:textColor="#000000"
+            android:textColorHint="#888888" />
+
+        <ImageButton
+            android:id="@+id/sendButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Send"
+            android:src="@android:drawable/ic_menu_send"
+            app:tint="@color/teal_700" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
