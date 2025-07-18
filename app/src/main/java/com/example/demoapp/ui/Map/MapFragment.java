@@ -38,7 +38,8 @@ public class MapFragment extends Fragment {
         View rootView = inflater.inflate(R.layout.fragment_map, container, false);
 
         // Set up osmdroid configuration
-        Configuration.getInstance().setUserAgentValue(BuildConfig.APPLICATION_ID);
+        Configuration.getInstance().setUserAgentValue("com.example.demoapp");
+
 
         // Initialize MapView
         mapView = rootView.findViewById(R.id.mapView);

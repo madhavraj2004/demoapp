@@ -1,13 +1,13 @@
 package com.example.demoapp;
 
-import android.content.Intent;
-import android.net.Uri;
+import android.os.Bundle;
 import android.text.util.Linkify;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
+import androidx.navigation.Navigation;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.List;
 
@@ -32,18 +32,24 @@ public class ChatAdapter extends RecyclerView.Adapter<ChatAdapter.ChatViewHolder
         ChatMessage chat = chatList.get(position);
         holder.messageText.setText(chat.getMessage());
 
+        // Automatically link URLs
         Linkify.addLinks(holder.messageText, Linkify.WEB_URLS);
 
-        // Optional: custom click for OpenStreetMap link
+        // Navigate to MapFragment on OSM coordinate click
+        // inside onBindViewHolder in ChatAdapter.java:
         holder.messageText.setOnClickListener(v -> {
             String text = chat.getMessage();
-            if (text.contains("https://www.openstreetmap.org/")) {
-                int startIndex = text.indexOf("https://www.openstreetmap.org/");
-                String url = text.substring(startIndex).split("\\s")[0];
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                v.getContext().startActivity(intent);
+            if (text.contains("https://www.openstreetmap.org/?mlat=")) {
+                double lat = Double.parseDouble(text.split("mlat=")[1].split("&")[0]);
+                double lon = Double.parseDouble(text.split("mlon=")[1].split("\\s")[0]);
+                Bundle args = new Bundle();
+                args.putDouble("lat", lat);
+                args.putDouble("lon", lon);
+                Navigation.findNavController(v)
+                        .navigate(R.id.action_chatFragment_to_mapFragment, args);
             }
         });
+
     }
 
     @Override
