@@ -4,13 +4,15 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.os.Bundle;
-import android.os.Handler;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.*;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -41,28 +43,22 @@ public class ChatFragment extends Fragment {
 
     private static final String TAG = "ChatBluetooth";
     private static final int PERMISSION_REQUEST_CODE = 1;
-    private static final String CHARACTERISTIC_UUID = "0000fef4-0000-1000-8000-00805f9b34fb";
-    private static final String TARGET_DEVICE_MAC = "30:30:F9:77:05:32";
 
-    // Bluetooth
+    // Nordic UART Service UUIDs
+    private static final UUID SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID TX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // notify from device
+    private static final UUID RX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // write to device
+
+    // Target device MAC
+    private static final String TARGET_DEVICE_MAC = "48:27:E2:3D:D0:D6";
+
     private RxBleClient rxBleClient;
     private RxBleDevice selectedDevice;
     private RxBleConnection connection;
-    private Disposable connectionDisposable;
     private final CompositeDisposable disposables = new CompositeDisposable();
-    private final Handler handler = new Handler();
-    private final Runnable updateTask = new Runnable() {
-        @Override
-        public void run() {
-            if (connection != null) {
-                readCharacteristic();
-                handler.postDelayed(this, 5000);
-            }
-        }
-    };
 
     // UI Elements
-    private TextView statusTextView, receivedDataTextView;
+    private TextView statusTextView;
     private EditText messageEditText;
     private RecyclerView chatRecyclerView;
     private ChatAdapter chatAdapter;
@@ -75,9 +71,7 @@ public class ChatFragment extends Fragment {
                              @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_chat, container, false);
 
-        // Init Views
         statusTextView = view.findViewById(R.id.statusTextView);
-        receivedDataTextView = view.findViewById(R.id.receivedDataTextView);
         messageEditText = view.findViewById(R.id.messageEditText);
         chatRecyclerView = view.findViewById(R.id.chatRecyclerView);
         Button scanButton = view.findViewById(R.id.btn_scan);
@@ -87,18 +81,15 @@ public class ChatFragment extends Fragment {
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireActivity());
 
-        // Init Chat
         chatAdapter = new ChatAdapter(chatMessages);
         chatRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
         chatRecyclerView.setAdapter(chatAdapter);
 
-        // Button listeners
         scanButton.setOnClickListener(v -> startScan());
         connectButton.setOnClickListener(v -> connectToDevice());
         disconnectButton.setOnClickListener(v -> disconnectFromDevice());
         sendButton.setOnClickListener(v -> sendMessageWithLocation());
 
-        // Init BLE
         rxBleClient = RxBleClient.create(requireContext());
         checkPermissions();
 
@@ -124,18 +115,18 @@ public class ChatFragment extends Fragment {
 
     private void startScan() {
         statusTextView.setText("Scanning...");
-        Disposable scanDisposable = rxBleClient.scanBleDevices()
+        Disposable scanDisp = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(scanResult -> {
                     if (scanResult.getBleDevice().getMacAddress().equals(TARGET_DEVICE_MAC)) {
                         selectedDevice = scanResult.getBleDevice();
                         statusTextView.setText("Device found: " + selectedDevice.getName());
                     }
-                }, throwable -> {
+                }, t -> {
                     statusTextView.setText("Scan failed.");
-                    Log.e(TAG, "Scan failed", throwable);
+                    Log.e(TAG, "Scan failed", t);
                 });
-        disposables.add(scanDisposable);
+        disposables.add(scanDisp);
     }
 
     private void connectToDevice() {
@@ -143,106 +134,103 @@ public class ChatFragment extends Fragment {
             statusTextView.setText("No device selected.");
             return;
         }
-
-        connectionDisposable = selectedDevice.establishConnection(false)
+        Disposable connDisp = selectedDevice.establishConnection(false)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(rxBleConnection -> {
                     connection = rxBleConnection;
                     statusTextView.setText("Connected.");
-                    handler.postDelayed(updateTask, 5000);
-                }, throwable -> {
-                    statusTextView.setText("Connection failed.");
-                    Log.e(TAG, "Connection failed", throwable);
-                });
 
-        disposables.add(connectionDisposable);
+                    // Once connected, subscribe to incoming messages
+                    subscribeToNotifications();
+                }, t -> {
+                    statusTextView.setText("Connection failed.");
+                    Log.e(TAG, "Connection failed", t);
+                });
+        disposables.add(connDisp);
+    }
+
+    /**
+     * Handles incoming BLE notifications on the TX characteristic.
+     * Each received byte array is converted to UTF-8 string and displayed in chat.
+     */
+    private void subscribeToNotifications() {
+        Disposable notifDisp = connection
+                .setupNotification(TX_CHAR_UUID)
+                .flatMap(obs -> obs)
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(bytes -> {
+                    String received = new String(bytes, StandardCharsets.UTF_8);
+                    addChatMessage("RX: " + received, false);
+                }, t -> Log.e(TAG, "Notification error", t));
+        disposables.add(notifDisp);
     }
 
     private void disconnectFromDevice() {
-        if (connectionDisposable != null && !connectionDisposable.isDisposed()) {
-            connectionDisposable.dispose();
-            connection = null;
-            statusTextView.setText("Disconnected.");
-        }
-    }
-
-    private void readCharacteristic() {
-        if (connection != null) {
-            connection.readCharacteristic(UUID.fromString(CHARACTERISTIC_UUID))
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(bytes -> {
-                        String data = new String(bytes, StandardCharsets.UTF_8);
-                        receivedDataTextView.setText(data);
-                    }, throwable -> Log.e(TAG, "Read failed", throwable));
-        }
+        disposables.clear();
+        connection = null;
+        statusTextView.setText("Disconnected.");
     }
 
     private void sendMessageWithLocation() {
-        String message = messageEditText.getText().toString().trim();
-        if (TextUtils.isEmpty(message)) return;
-
-        if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION)
+        if (connection == null) {
+            statusTextView.setText("Not connected to device.");
+            return;
+        }
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(requireActivity(),
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 100);
+                    new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSION_REQUEST_CODE);
+            return;
+        }
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(requireActivity(),
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSION_REQUEST_CODE);
             return;
         }
 
         fusedLocationClient.getLastLocation().addOnSuccessListener(location -> {
-            String fullMessage = message;
+            String userText = messageEditText.getText().toString().trim();
+            StringBuilder sb = new StringBuilder();
+            if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
             if (location != null) {
-                String osmLink = "https://www.openstreetmap.org/?mlat=" + location.getLatitude() + "&mlon=" + location.getLongitude();
-                fullMessage += "\nLocation: " + osmLink;
-            } else {
-                fullMessage += "\n(Location unavailable)";
-            }
+                sb.append("Location: https://www.openstreetmap.org/?mlat=")
+                        .append(location.getLatitude())
+                        .append("&mlon=")
+                        .append(location.getLongitude());
+            } else sb.append("Location unavailable");
+            final String fullMessage = sb.toString();
 
-            // Add to UI chat
-            ChatMessage chatMessage = new ChatMessage(fullMessage, true);
-            chatMessages.add(chatMessage);
-            chatAdapter.notifyItemInserted(chatMessages.size() - 1);
-            chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
+            addChatMessage("TX: " + fullMessage, true);
             messageEditText.setText("");
 
-            // BLE: Send to device
-            sendMessageOverBLE(fullMessage);
-
-            // Simulate receiver response
-            receiveMessage("Received: " + fullMessage);
+            Disposable writeDisp = connection
+                    .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe(
+                            bytes -> Log.d(TAG, "Sent: " + fullMessage),
+                            t -> {
+                                Log.e(TAG, "Write failed", t);
+                                statusTextView.setText("Send failed: " + t.getMessage());
+                            }
+                    );
+            disposables.add(writeDisp);
+        }).addOnFailureListener(e -> {
+            Log.e(TAG, "Location fetch failed", e);
+            statusTextView.setText("Could not fetch location.");
         });
     }
 
-    private void sendMessageOverBLE(String message) {
-        if (connection == null) {
-            Log.w(TAG, "BLE connection not available.");
-            return;
-        }
-
-        byte[] data = message.getBytes(StandardCharsets.UTF_8);
-
-        connection.writeCharacteristic(UUID.fromString(CHARACTERISTIC_UUID), data)
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(
-                        writtenBytes -> Log.d(TAG, "Message sent over BLE: " + message),
-                        throwable -> Log.e(TAG, "Failed to send message over BLE", throwable)
-                );
-    }
-
-    private void receiveMessage(String msg) {
-        chatRecyclerView.postDelayed(() -> {
-            chatMessages.add(new ChatMessage(msg, false));
-            chatAdapter.notifyItemInserted(chatMessages.size() - 1);
-            chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
-        }, 1000);
+    private void addChatMessage(String text, boolean isSent) {
+        ChatMessage msg = new ChatMessage(text, isSent);
+        chatMessages.add(msg);
+        chatAdapter.notifyItemInserted(chatMessages.size() - 1);
+        chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        if (connectionDisposable != null && !connectionDisposable.isDisposed()) {
-            connectionDisposable.dispose();
-        }
-        if (!disposables.isDisposed()) disposables.dispose();
-        handler.removeCallbacks(updateTask);
+        disposables.dispose();
     }
 }
