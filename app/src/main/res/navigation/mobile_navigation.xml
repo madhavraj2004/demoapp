@@ -9,7 +9,14 @@
         android:id="@+id/navigation_map"
         android:name="com.example.demoapp.ui.Map.MapFragment"
         android:label="@string/title_Map"
-        tools:layout="@layout/fragment_map" />
+        tools:layout="@layout/fragment_map">
+        <argument
+            android:name="lat"
+            app:argType="float" />
+        <argument
+            android:name="lon"
+            app:argType="float" />
+    </fragment>
 
     <fragment
         android:id="@+id/navigation_chat"

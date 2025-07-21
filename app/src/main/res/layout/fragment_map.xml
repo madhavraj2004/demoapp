@@ -9,15 +9,15 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Add this Button on top -->
     <Button
-        android:id="@+id/btnDownloadMap"
+        android:id="@+id/btn_download_tiles"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Download Map"
-        android:layout_alignParentBottom="true"
-        android:layout_alignParentEnd="true"
+        android:text="Download Tiles"
         android:layout_margin="16dp"
-        android:backgroundTint="@color/purple_500"
-        android:textColor="@android:color/white" />
+        android:backgroundTint="@color/teal_700"
+        android:textColor="@android:color/white"
+        android:layout_gravity="top|end"/>
 
 </RelativeLayout>

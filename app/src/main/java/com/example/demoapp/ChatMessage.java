@@ -16,4 +16,7 @@ public class ChatMessage {
     public boolean isSentByUser() {
         return isSentByUser;
     }
+    public void setMessage(String message) {
+        this.message = message;
+    }
 }

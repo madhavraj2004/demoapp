@@ -172,10 +172,6 @@ public class ChatFragment extends Fragment {
     }
 
     private void sendMessageWithLocation() {
-        if (connection == null) {
-            statusTextView.setText("Not connected to device.");
-            return;
-        }
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(requireActivity(),
@@ -201,24 +197,64 @@ public class ChatFragment extends Fragment {
             } else sb.append("Location unavailable");
             final String fullMessage = sb.toString();
 
-            addChatMessage("TX: " + fullMessage, true);
+            // Always add the message to chat
+            if (connection == null) {
+                // Not connected, show couldn't send
+                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
+                statusTextView.setText("Not connected to device.");
+            } else {
+                addChatMessage("TX: " + fullMessage, true);
+                Disposable writeDisp = connection
+                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(
+                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
+                                t -> {
+                                    Log.e(TAG, "Write failed", t);
+                                    // Update the last chat message with error info
+                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
+                                    statusTextView.setText("Send failed: " + t.getMessage());
+                                }
+                        );
+                disposables.add(writeDisp);
+            }
             messageEditText.setText("");
-
-            Disposable writeDisp = connection
-                    .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(
-                            bytes -> Log.d(TAG, "Sent: " + fullMessage),
-                            t -> {
-                                Log.e(TAG, "Write failed", t);
-                                statusTextView.setText("Send failed: " + t.getMessage());
-                            }
-                    );
-            disposables.add(writeDisp);
         }).addOnFailureListener(e -> {
             Log.e(TAG, "Location fetch failed", e);
             statusTextView.setText("Could not fetch location.");
+            String userText = messageEditText.getText().toString().trim();
+            StringBuilder sb = new StringBuilder();
+            if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
+            sb.append("Location unavailable");
+            final String fullMessage = sb.toString();
+            if (connection == null) {
+                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
+            } else {
+                addChatMessage("TX: " + fullMessage, true);
+                Disposable writeDisp = connection
+                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(
+                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
+                                t -> {
+                                    Log.e(TAG, "Write failed", t);
+                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
+                                    statusTextView.setText("Send failed: " + t.getMessage());
+                                }
+                        );
+                disposables.add(writeDisp);
+            }
+            messageEditText.setText("");
         });
+    }
+
+    // Helper method to update the last chat message with error info
+    private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
+        if (!chatMessages.isEmpty()) {
+            ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
+            lastMsg.setMessage("TX: " + fullMessage + " (couldn't send: " + errorMsg + ")");
+            chatAdapter.notifyItemChanged(chatMessages.size() - 1);
+        }
     }
 
     private void addChatMessage(String text, boolean isSent) {
