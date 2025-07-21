@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.UUID;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
-import io.reactivex.rxjava3.core.Single;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
@@ -65,9 +64,6 @@ public class ChatFragment extends Fragment {
     private ChatAdapter chatAdapter;
     private final ArrayList<ChatMessage> chatMessages = new ArrayList<>();
     private FusedLocationProviderClient fusedLocationClient;
-
-    /** To prevent sending before notification is enabled **/
-    private boolean notificationReady = false;
 
     @Nullable
     @Override
@@ -140,34 +136,38 @@ public class ChatFragment extends Fragment {
         }
         Disposable connDisp = selectedDevice.establishConnection(false)
                 .observeOn(AndroidSchedulers.mainThread())
-                .flatMap(rxBleConnection -> {
+                .subscribe(rxBleConnection -> {
                     connection = rxBleConnection;
                     statusTextView.setText("Connected.");
-                    // Enable notifications, only allow sending after this succeeds
-                    return rxBleConnection
-                            .setupNotification(TX_CHAR_UUID)
-                            .doOnNext(notificationObservable -> notificationReady = true)
-                            .flatMap(notificationObservable -> notificationObservable)
-                            .observeOn(AndroidSchedulers.mainThread());
-                })
-                .subscribe(
-                        notificationBytes -> {
-                            String received = new String(notificationBytes, StandardCharsets.UTF_8);
-                            addChatMessage("RX: " + received, false);
-                        },
-                        t -> {
-                            notificationReady = false;
-                            statusTextView.setText("Connection/Notification failed.");
-                            Log.e(TAG, "Connection or notification setup failed", t);
-                        }
-                );
+
+                    // Once connected, subscribe to incoming messages
+                    subscribeToNotifications();
+                }, t -> {
+                    statusTextView.setText("Connection failed.");
+                    Log.e(TAG, "Connection failed", t);
+                });
         disposables.add(connDisp);
+    }
+
+    /**
+     * Handles incoming BLE notifications on the TX characteristic.
+     * Each received byte array is converted to UTF-8 string and displayed in chat.
+     */
+    private void subscribeToNotifications() {
+        Disposable notifDisp = connection
+                .setupNotification(TX_CHAR_UUID)
+                .flatMap(obs -> obs)
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(bytes -> {
+                    String received = new String(bytes, StandardCharsets.UTF_8);
+                    addChatMessage("RX: " + received, false);
+                }, t -> Log.e(TAG, "Notification error", t));
+        disposables.add(notifDisp);
     }
 
     private void disconnectFromDevice() {
         disposables.clear();
         connection = null;
-        notificationReady = false;
         statusTextView.setText("Disconnected.");
     }
 
@@ -185,17 +185,6 @@ public class ChatFragment extends Fragment {
             return;
         }
 
-        if (connection == null) {
-            addChatMessage("TX: (couldn't send: Not connected to device.)", true);
-            statusTextView.setText("Not connected to device.");
-            return;
-        }
-        if (!notificationReady) {
-            addChatMessage("TX: (couldn't send: Notification not ready. Wait for connection.)", true);
-            statusTextView.setText("Notification not ready. Wait for connection.");
-            return;
-        }
-
         fusedLocationClient.getLastLocation().addOnSuccessListener(location -> {
             String userText = messageEditText.getText().toString().trim();
             StringBuilder sb = new StringBuilder();
@@ -208,22 +197,27 @@ public class ChatFragment extends Fragment {
             } else sb.append("Location unavailable");
             final String fullMessage = sb.toString();
 
-            addChatMessage("TX: " + fullMessage, true);
-
-            // Write only if connected and notificationReady
-            Disposable writeDisp = connection
-                    .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(
-                            bytes -> Log.d(TAG, "Sent: " + fullMessage),
-                            t -> {
-                                Log.e(TAG, "Write failed", t);
-                                updateLastChatMessageWithError(fullMessage, t.getMessage());
-                                statusTextView.setText("Send failed: " + t.getMessage());
-                            }
-                    );
-            disposables.add(writeDisp);
-
+            // Always add the message to chat
+            if (connection == null) {
+                // Not connected, show couldn't send
+                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
+                statusTextView.setText("Not connected to device.");
+            } else {
+                addChatMessage("TX: " + fullMessage, true);
+                Disposable writeDisp = connection
+                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(
+                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
+                                t -> {
+                                    Log.e(TAG, "Write failed", t);
+                                    // Update the last chat message with error info
+                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
+                                    statusTextView.setText("Send failed: " + t.getMessage());
+                                }
+                        );
+                disposables.add(writeDisp);
+            }
             messageEditText.setText("");
         }).addOnFailureListener(e -> {
             Log.e(TAG, "Location fetch failed", e);
@@ -233,22 +227,23 @@ public class ChatFragment extends Fragment {
             if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
             sb.append("Location unavailable");
             final String fullMessage = sb.toString();
-
-            addChatMessage("TX: " + fullMessage, true);
-
-            Disposable writeDisp = connection
-                    .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(
-                            bytes -> Log.d(TAG, "Sent: " + fullMessage),
-                            t -> {
-                                Log.e(TAG, "Write failed", t);
-                                updateLastChatMessageWithError(fullMessage, t.getMessage());
-                                statusTextView.setText("Send failed: " + t.getMessage());
-                            }
-                    );
-            disposables.add(writeDisp);
-
+            if (connection == null) {
+                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
+            } else {
+                addChatMessage("TX: " + fullMessage, true);
+                Disposable writeDisp = connection
+                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(
+                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
+                                t -> {
+                                    Log.e(TAG, "Write failed", t);
+                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
+                                    statusTextView.setText("Send failed: " + t.getMessage());
+                                }
+                        );
+                disposables.add(writeDisp);
+            }
             messageEditText.setText("");
         });
     }
