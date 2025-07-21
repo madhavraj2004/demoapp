@@ -45,9 +45,9 @@ public class ChatFragment extends Fragment {
     private static final int PERMISSION_REQUEST_CODE = 1;
 
     // Nordic UART Service UUIDs
-    private static final UUID SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID TX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // notify from device
-    private static final UUID RX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // write to device
+    private static final UUID SERVICE_UUID    = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID TX_CHAR_UUID   = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // notify from device (ESP → Android)
+    private static final UUID RX_CHAR_UUID   = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // write to device (Android → ESP)
 
     // Target device MAC
     private static final String TARGET_DEVICE_MAC = "48:27:E2:3D:D0:D6";
