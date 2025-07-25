@@ -16,6 +16,7 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
@@ -70,6 +71,13 @@ public class ChatFragment extends Fragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
                              @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_chat, container, false);
+        Bundle args = getArguments();
+        String userName = args != null
+                ? args.getString("userName", "Unknown")
+                : "Unknown";
+
+        // Set toolbar title
+        ((AppCompatActivity)requireActivity()).getSupportActionBar().setTitle(userName);
 
         statusTextView = view.findViewById(R.id.statusTextView);
         messageEditText = view.findViewById(R.id.messageEditText);

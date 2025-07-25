@@ -38,7 +38,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Define top-level destinations
         AppBarConfiguration appBarConfiguration = new AppBarConfiguration.Builder(
-                R.id.navigation_map, R.id.navigation_chat, R.id.navigation_bluetooth)
+                R.id.navigation_map, R.id.usersFragment, R.id.navigation_bluetooth)
                 .build();
 
         // Setup the NavController

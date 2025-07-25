@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/mobile_navigation"
-    app:startDestination="@+id/navigation_chat">
+    app:startDestination="@+id/usersFragment">
 
     <fragment
         android:id="@+id/navigation_map"
@@ -17,13 +17,24 @@
             android:name="lon"
             app:argType="float" />
     </fragment>
+    <fragment
+        android:id="@+id/usersFragment"
+        android:name="com.example.demoapp.UsersFragment"
+        android:label="Users">
 
+        <!-- THIS is the action you need: -->
+        <action
+            android:id="@+id/action_usersFragment_to_chatFragment"
+            app:destination="@id/navigation_chat" />
+    </fragment>
     <fragment
         android:id="@+id/navigation_chat"
         android:name="com.example.demoapp.ui.Chat.ChatFragment"
         android:label="@string/title_chat"
         tools:layout="@layout/fragment_chat">
-
+        <argument
+            android:name="userName"
+            app:argType="string" />
         <!-- 👇 MOVE ACTION INSIDE CHAT FRAGMENT -->
         <action
             android:id="@+id/action_chatFragment_to_mapFragment"

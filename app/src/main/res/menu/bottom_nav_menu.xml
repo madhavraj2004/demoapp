@@ -7,7 +7,7 @@
         android:title="@string/title_bluetooth" />
 
     <item
-        android:id="@+id/navigation_chat"
+        android:id="@+id/usersFragment"
         android:icon="@drawable/ic_chat"
         android:title="@string/title_Audio" />
     <item
