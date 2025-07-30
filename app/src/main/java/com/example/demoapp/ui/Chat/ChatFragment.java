@@ -1,6 +1,7 @@
 package com.example.demoapp.ui.Chat;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.os.Bundle;
@@ -14,10 +15,12 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -34,6 +37,8 @@ import com.polidea.rxandroidble3.RxBleDevice;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
@@ -43,22 +48,15 @@ import io.reactivex.rxjava3.disposables.Disposable;
 public class ChatFragment extends Fragment {
 
     private static final String TAG = "ChatBluetooth";
-    private static final int PERMISSION_REQUEST_CODE = 1;
-
-    // Nordic UART Service UUIDs
-    private static final UUID SERVICE_UUID    = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID TX_CHAR_UUID   = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // notify from device (ESP → Android)
-    private static final UUID RX_CHAR_UUID   = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // write to device (Android → ESP)
-
-    // Target device MAC
-    private static final String TARGET_DEVICE_MAC = "48:27:E2:3D:D0:D6";
+    private static final UUID SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
 
     private RxBleClient rxBleClient;
     private RxBleDevice selectedDevice;
     private RxBleConnection connection;
     private final CompositeDisposable disposables = new CompositeDisposable();
 
-    // UI Elements
     private TextView statusTextView;
     private EditText messageEditText;
     private RecyclerView chatRecyclerView;
@@ -66,18 +64,36 @@ public class ChatFragment extends Fragment {
     private final ArrayList<ChatMessage> chatMessages = new ArrayList<>();
     private FusedLocationProviderClient fusedLocationClient;
 
+    private final Map<String, RxBleDevice> discoveredDevices = new HashMap<>();
+    private final ArrayList<String> deviceNamesList = new ArrayList<>();
+
+    // Permissions launcher
+    private final ActivityResultLauncher<String[]> permissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+                boolean allGranted = true;
+                for (Boolean granted : result.values()) {
+                    if (!granted) {
+                        allGranted = false;
+                        break;
+                    }
+                }
+                if (allGranted) {
+                    startScan();
+                } else {
+                    statusTextView.setText("Permissions denied. Can't scan or connect.");
+                }
+            });
+
+    @RequiresPermission(allOf = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION})
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
                              @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_chat, container, false);
         Bundle args = getArguments();
-        String userName = args != null
-                ? args.getString("userName", "Unknown")
-                : "Unknown";
+        String userName = args != null ? args.getString("userName", "Unknown") : "Unknown";
 
-        // Set toolbar title
-        ((AppCompatActivity)requireActivity()).getSupportActionBar().setTitle(userName);
+        ((AppCompatActivity) requireActivity()).getSupportActionBar().setTitle(userName);
 
         statusTextView = view.findViewById(R.id.statusTextView);
         messageEditText = view.findViewById(R.id.messageEditText);
@@ -93,42 +109,54 @@ public class ChatFragment extends Fragment {
         chatRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
         chatRecyclerView.setAdapter(chatAdapter);
 
-        scanButton.setOnClickListener(v -> startScan());
-        connectButton.setOnClickListener(v -> connectToDevice());
+        rxBleClient = RxBleClient.create(requireContext());
+
+        scanButton.setOnClickListener(v -> checkAndRequestPermissions());
+        connectButton.setOnClickListener(v -> showDeviceSelectionDialog());
         disconnectButton.setOnClickListener(v -> disconnectFromDevice());
         sendButton.setOnClickListener(v -> sendMessageWithLocation());
-
-        rxBleClient = RxBleClient.create(requireContext());
-        checkPermissions();
 
         return view;
     }
 
-    private void checkPermissions() {
-        String[] permissions = {
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-        };
-        ArrayList<String> missing = new ArrayList<>();
-        for (String p : permissions) {
-            if (ContextCompat.checkSelfPermission(requireContext(), p) != PackageManager.PERMISSION_GRANTED) {
-                missing.add(p);
-            }
+    private void checkAndRequestPermissions() {
+        ArrayList<String> permissionsNeeded = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
+                != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.BLUETOOTH_SCAN);
         }
-        if (!missing.isEmpty()) {
-            requestPermissions(missing.toArray(new String[0]), PERMISSION_REQUEST_CODE);
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
+        if (!permissionsNeeded.isEmpty()) {
+            permissionLauncher.launch(permissionsNeeded.toArray(new String[0]));
+        } else {
+            startScan();
         }
     }
 
     private void startScan() {
         statusTextView.setText("Scanning...");
+        discoveredDevices.clear();
+        deviceNamesList.clear();
+
         Disposable scanDisp = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(scanResult -> {
-                    if (scanResult.getBleDevice().getMacAddress().equals(TARGET_DEVICE_MAC)) {
-                        selectedDevice = scanResult.getBleDevice();
-                        statusTextView.setText("Device found: " + selectedDevice.getName());
+                    RxBleDevice device = scanResult.getBleDevice();
+                    String mac = device.getMacAddress();
+                    String name = device.getName() != null ? device.getName() : "Unknown";
+
+                    if (!discoveredDevices.containsKey(mac)) {
+                        discoveredDevices.put(mac, device);
+                        deviceNamesList.add(name + " (" + mac + ")");
+                        statusTextView.setText("Found: " + discoveredDevices.size() + " device(s)");
                     }
                 }, t -> {
                     statusTextView.setText("Scan failed.");
@@ -137,18 +165,36 @@ public class ChatFragment extends Fragment {
         disposables.add(scanDisp);
     }
 
+    private void showDeviceSelectionDialog() {
+        if (discoveredDevices.isEmpty()) {
+            statusTextView.setText("No devices found.");
+            return;
+        }
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Select a device")
+                .setItems(deviceNamesList.toArray(new String[0]), (dialog, which) -> {
+                    String selectedText = deviceNamesList.get(which);
+                    String mac = selectedText.substring(selectedText.indexOf('(') + 1, selectedText.indexOf(')'));
+                    selectedDevice = discoveredDevices.get(mac);
+                    statusTextView.setText("Selected: " + selectedText);
+                    connectToDevice();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void connectToDevice() {
         if (selectedDevice == null) {
             statusTextView.setText("No device selected.");
             return;
         }
+
         Disposable connDisp = selectedDevice.establishConnection(false)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(rxBleConnection -> {
                     connection = rxBleConnection;
-                    statusTextView.setText("Connected.");
-
-                    // Once connected, subscribe to incoming messages
+                    statusTextView.setText("Connected to: " + selectedDevice.getMacAddress());
                     subscribeToNotifications();
                 }, t -> {
                     statusTextView.setText("Connection failed.");
@@ -157,10 +203,6 @@ public class ChatFragment extends Fragment {
         disposables.add(connDisp);
     }
 
-    /**
-     * Handles incoming BLE notifications on the TX characteristic.
-     * Each received byte array is converted to UTF-8 string and displayed in chat.
-     */
     private void subscribeToNotifications() {
         Disposable notifDisp = connection
                 .setupNotification(TX_CHAR_UUID)
@@ -176,23 +218,12 @@ public class ChatFragment extends Fragment {
     private void disconnectFromDevice() {
         disposables.clear();
         connection = null;
+        selectedDevice = null;
         statusTextView.setText("Disconnected.");
     }
 
+    @RequiresPermission(allOf = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION})
     private void sendMessageWithLocation() {
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(requireActivity(),
-                    new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSION_REQUEST_CODE);
-            return;
-        }
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(requireActivity(),
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSION_REQUEST_CODE);
-            return;
-        }
-
         fusedLocationClient.getLastLocation().addOnSuccessListener(location -> {
             String userText = messageEditText.getText().toString().trim();
             StringBuilder sb = new StringBuilder();
@@ -202,31 +233,10 @@ public class ChatFragment extends Fragment {
                         .append(location.getLatitude())
                         .append("&mlon=")
                         .append(location.getLongitude());
-            } else sb.append("Location unavailable");
-            final String fullMessage = sb.toString();
-
-            // Always add the message to chat
-            if (connection == null) {
-                // Not connected, show couldn't send
-                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
-                statusTextView.setText("Not connected to device.");
             } else {
-                addChatMessage("TX: " + fullMessage, true);
-                Disposable writeDisp = connection
-                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
-                        .observeOn(AndroidSchedulers.mainThread())
-                        .subscribe(
-                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
-                                t -> {
-                                    Log.e(TAG, "Write failed", t);
-                                    // Update the last chat message with error info
-                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
-                                    statusTextView.setText("Send failed: " + t.getMessage());
-                                }
-                        );
-                disposables.add(writeDisp);
+                sb.append("Location unavailable");
             }
-            messageEditText.setText("");
+            sendMessage(sb.toString());
         }).addOnFailureListener(e -> {
             Log.e(TAG, "Location fetch failed", e);
             statusTextView.setText("Could not fetch location.");
@@ -234,29 +244,32 @@ public class ChatFragment extends Fragment {
             StringBuilder sb = new StringBuilder();
             if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
             sb.append("Location unavailable");
-            final String fullMessage = sb.toString();
-            if (connection == null) {
-                addChatMessage("TX: " + fullMessage + " (couldn't send: Not connected to device.)", true);
-            } else {
-                addChatMessage("TX: " + fullMessage, true);
-                Disposable writeDisp = connection
-                        .writeCharacteristic(RX_CHAR_UUID, fullMessage.getBytes(StandardCharsets.UTF_8))
-                        .observeOn(AndroidSchedulers.mainThread())
-                        .subscribe(
-                                bytes -> Log.d(TAG, "Sent: " + fullMessage),
-                                t -> {
-                                    Log.e(TAG, "Write failed", t);
-                                    updateLastChatMessageWithError(fullMessage, t.getMessage());
-                                    statusTextView.setText("Send failed: " + t.getMessage());
-                                }
-                        );
-                disposables.add(writeDisp);
-            }
-            messageEditText.setText("");
+            sendMessage(sb.toString());
         });
     }
 
-    // Helper method to update the last chat message with error info
+    private void sendMessage(String message) {
+        if (connection == null) {
+            addChatMessage("TX: " + message + " (couldn't send: Not connected)", true);
+            statusTextView.setText("Not connected to device.");
+        } else {
+            addChatMessage("TX: " + message, true);
+            Disposable writeDisp = connection
+                    .writeCharacteristic(RX_CHAR_UUID, message.getBytes(StandardCharsets.UTF_8))
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe(
+                            bytes -> Log.d(TAG, "Sent: " + message),
+                            t -> {
+                                Log.e(TAG, "Write failed", t);
+                                updateLastChatMessageWithError(message, t.getMessage());
+                                statusTextView.setText("Send failed: " + t.getMessage());
+                            }
+                    );
+            disposables.add(writeDisp);
+        }
+        messageEditText.setText("");
+    }
+
     private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
         if (!chatMessages.isEmpty()) {
             ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
