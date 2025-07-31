@@ -35,6 +35,7 @@ import com.polidea.rxandroidble3.RxBleClient;
 import com.polidea.rxandroidble3.RxBleConnection;
 import com.polidea.rxandroidble3.RxBleDevice;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -49,11 +50,11 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
 public class ChatFragment extends Fragment {
-    private static final String TAG          = "ChatBluetooth";
-    private static final UUID SERVICE_UUID   = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID RX_CHAR_UUID   = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID TX_CHAR_UUID   = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final int    CHUNK_SIZE    = 100; // MTU–3 or your chosen chunk
+    private static final String TAG        = "ChatBluetooth";
+    private static final UUID   SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID   RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID   TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final int    CHUNK_SIZE   = 100; // MTU–3
 
     private RxBleClient rxBleClient;
     private RxBleConnection connection;
@@ -69,6 +70,9 @@ public class ChatFragment extends Fragment {
     private final Map<String, RxBleDevice> discovered = new HashMap<>();
     private final ArrayList<String> deviceNames = new ArrayList<>();
     private RxBleDevice selectedDevice;
+
+    // Buffer for incoming RX fragments
+    private final ByteArrayOutputStream incomingBuffer = new ByteArrayOutputStream();
 
     // permissions
     private final ActivityResultLauncher<String[]> permLauncher =
@@ -86,9 +90,9 @@ public class ChatFragment extends Fragment {
         View v = inflater.inflate(R.layout.fragment_chat, container, false);
         ((AppCompatActivity)requireActivity()).getSupportActionBar().setTitle("iPolluSense Chat");
 
-        statusTextView  = v.findViewById(R.id.statusTextView);
-        messageEditText = v.findViewById(R.id.messageEditText);
-        chatRecyclerView= v.findViewById(R.id.chatRecyclerView);
+        statusTextView   = v.findViewById(R.id.statusTextView);
+        messageEditText  = v.findViewById(R.id.messageEditText);
+        chatRecyclerView = v.findViewById(R.id.chatRecyclerView);
         Button scanBtn      = v.findViewById(R.id.btn_scan);
         Button connectBtn   = v.findViewById(R.id.btn_connect);
         Button disconnectBtn= v.findViewById(R.id.btn_disconnect);
@@ -104,25 +108,22 @@ public class ChatFragment extends Fragment {
         connectBtn.setOnClickListener(x -> showDeviceDialog());
         disconnectBtn.setOnClickListener(x -> disconnect());
         sendBtn.setOnClickListener(x -> {
-            // Check both FINE and COARSE
+            // runtime check for location perms
             if (ContextCompat.checkSelfPermission(requireContext(),
-                    Manifest.permission.ACCESS_FINE_LOCATION)
-                    == PackageManager.PERMISSION_GRANTED
+                    Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                     && ContextCompat.checkSelfPermission(requireContext(),
-                    Manifest.permission.ACCESS_COARSE_LOCATION)
-                    == PackageManager.PERMISSION_GRANTED) {
+                    Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
 
-                // We have location permission: go ahead
                 sendMessageWithLocation();
 
             } else {
-                // No permission: request it via your existing launcher
                 permLauncher.launch(new String[]{
                         Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION
                 });
             }
         });
+
         return v;
     }
 
@@ -144,8 +145,8 @@ public class ChatFragment extends Fragment {
 
         Disposable d = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(result -> {
-                    RxBleDevice dev = result.getBleDevice();
+                .subscribe(scanResult -> {
+                    RxBleDevice dev = scanResult.getBleDevice();
                     String mac = dev.getMacAddress();
                     String name = dev.getName() != null ? dev.getName() : mac;
                     if (!discovered.containsKey(mac)) {
@@ -197,8 +198,14 @@ public class ChatFragment extends Fragment {
                 .flatMap(obs -> obs)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(bytes -> {
-                    String rx = new String(bytes, StandardCharsets.UTF_8);
-                    addChatMessage("RX: " + rx, false);
+                    // accumulate fragments
+                    incomingBuffer.write(bytes, 0, bytes.length);
+                    // if this chunk is smaller than CHUNK_SIZE, it's the last
+                    if (bytes.length < CHUNK_SIZE) {
+                        String full = new String(incomingBuffer.toByteArray(), StandardCharsets.UTF_8);
+                        addChatMessage("RX: " + full, false);
+                        incomingBuffer.reset();
+                    }
                 }, t -> Log.e(TAG, "notif", t));
         disposables.add(d);
     }
@@ -214,22 +221,16 @@ public class ChatFragment extends Fragment {
             Manifest.permission.ACCESS_COARSE_LOCATION
     })
     private void sendMessageWithLocation() {
-        // 1) Explicitly check permissions at runtime:
-        if ( ContextCompat.checkSelfPermission(requireContext(),
-                Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED
-                && ContextCompat.checkSelfPermission(requireContext(),
-                Manifest.permission.ACCESS_COARSE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED ) {
-
-            // Either request them again or bail out with a user‐facing message:
+        // final safety check
+        if (ContextCompat.checkSelfPermission(requireContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(requireContext(),
+                Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(requireContext(),
-                    "Location permission required to send message",
-                    Toast.LENGTH_SHORT).show();
+                    "Location permission required", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // 2) Safe to call getLastLocation():
         fusedLocationClient.getLastLocation()
                 .addOnSuccessListener(location -> {
                     String text = messageEditText.getText().toString().trim();
@@ -238,15 +239,14 @@ public class ChatFragment extends Fragment {
                     if (location != null) {
                         sb.append("Location: https://www.openstreetmap.org/?mlat=")
                                 .append(location.getLatitude())
-                                .append("&mlon=")
-                                .append(location.getLongitude());
+                                .append("&mlon=").append(location.getLongitude());
                     } else {
                         sb.append("Location unavailable");
                     }
                     splitAndSend(sb.toString());
                 })
                 .addOnFailureListener(e -> {
-                    Log.e(TAG, "Location fetch failed", e);
+                    Log.e(TAG, "Location failed", e);
                     Toast.makeText(requireContext(),
                             "Could not fetch location", Toast.LENGTH_SHORT).show();
                 });
@@ -260,12 +260,13 @@ public class ChatFragment extends Fragment {
         addChatMessage("TX: " + msg, true);
         messageEditText.setText("");
 
-        Disposable d = connection.requestMtu(CHUNK_SIZE + 3)
+        Disposable d = connection
+                .requestMtu(CHUNK_SIZE + 3)
                 .flatMapPublisher(mtu -> {
                     byte[] data = msg.getBytes(StandardCharsets.UTF_8);
                     List<byte[]> chunks = new ArrayList<>();
-                    for (int i=0; i<data.length; i+=CHUNK_SIZE) {
-                        int end = Math.min(data.length, i+CHUNK_SIZE);
+                    for (int i = 0; i < data.length; i += CHUNK_SIZE) {
+                        int end = Math.min(data.length, i + CHUNK_SIZE);
                         chunks.add(Arrays.copyOfRange(data, i, end));
                     }
                     return Flowable.fromIterable(chunks);
@@ -275,9 +276,10 @@ public class ChatFragment extends Fragment {
                 )
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        b -> Log.d(TAG, "chunk sent"),
+                        bytes -> Log.d(TAG, "chunk sent"),
                         t -> {
                             Log.e(TAG, "send failed", t);
+                            updateLastChatMessageWithError(msg, t.getMessage());
                         }
                 );
         disposables.add(d);
@@ -288,6 +290,7 @@ public class ChatFragment extends Fragment {
         chatAdapter.notifyItemInserted(chatMessages.size()-1);
         chatRecyclerView.scrollToPosition(chatMessages.size()-1);
     }
+
     private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
         if (!chatMessages.isEmpty()) {
             ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
@@ -295,9 +298,9 @@ public class ChatFragment extends Fragment {
             chatAdapter.notifyItemChanged(chatMessages.size() - 1);
         }
     }
+
     @Override public void onDestroyView() {
         super.onDestroyView();
         disposables.clear();
     }
 }
-
