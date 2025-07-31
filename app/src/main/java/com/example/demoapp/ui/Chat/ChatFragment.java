@@ -54,7 +54,7 @@ public class ChatFragment extends Fragment {
     private static final UUID   SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID   RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID   TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final int    CHUNK_SIZE   = 100; // MTU–3
+    private static final int    CHUNK_SIZE   = 125; // MTU–3
 
     private RxBleClient rxBleClient;
     private RxBleConnection connection;
@@ -253,15 +253,14 @@ public class ChatFragment extends Fragment {
     }
 
     private void splitAndSend(String msg) {
-        if (connection == null) {
-            addChatMessage("TX: " + msg + " (not connected)", true);
-            return;
-        }
+        if (connection == null) { /* … */ }
+
         addChatMessage("TX: " + msg, true);
         messageEditText.setText("");
 
         Disposable d = connection
-                .requestMtu(CHUNK_SIZE + 3)
+                // ← force 128‐byte MTU so each write fragment is ≤125 bytes
+                .requestMtu(128)
                 .flatMapPublisher(mtu -> {
                     byte[] data = msg.getBytes(StandardCharsets.UTF_8);
                     List<byte[]> chunks = new ArrayList<>();
@@ -276,7 +275,7 @@ public class ChatFragment extends Fragment {
                 )
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        bytes -> Log.d(TAG, "chunk sent"),
+                        bytes -> Log.d(TAG, "chunk sent, size=" + bytes.length),
                         t -> {
                             Log.e(TAG, "send failed", t);
                             updateLastChatMessageWithError(msg, t.getMessage());
@@ -284,6 +283,7 @@ public class ChatFragment extends Fragment {
                 );
         disposables.add(d);
     }
+
 
     private void addChatMessage(String text, boolean isSent) {
         chatMessages.add(new ChatMessage(text, isSent));
