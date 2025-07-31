@@ -3,7 +3,6 @@ package com.example.demoapp.ui.Chat;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.content.pm.PackageManager;
-import android.location.Location;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.Log;
@@ -14,6 +13,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -49,14 +49,13 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
 public class ChatFragment extends Fragment {
-
-    private static final String TAG = "ChatBluetooth";
-    private static final UUID SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final String TAG          = "ChatBluetooth";
+    private static final UUID SERVICE_UUID   = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID RX_CHAR_UUID   = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID TX_CHAR_UUID   = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final int    CHUNK_SIZE    = 100; // MTU–3 or your chosen chunk
 
     private RxBleClient rxBleClient;
-    private RxBleDevice selectedDevice;
     private RxBleConnection connection;
     private final CompositeDisposable disposables = new CompositeDisposable();
 
@@ -65,164 +64,149 @@ public class ChatFragment extends Fragment {
     private RecyclerView chatRecyclerView;
     private ChatAdapter chatAdapter;
     private final ArrayList<ChatMessage> chatMessages = new ArrayList<>();
+
     private FusedLocationProviderClient fusedLocationClient;
+    private final Map<String, RxBleDevice> discovered = new HashMap<>();
+    private final ArrayList<String> deviceNames = new ArrayList<>();
+    private RxBleDevice selectedDevice;
 
-    private final Map<String, RxBleDevice> discoveredDevices = new HashMap<>();
-    private final ArrayList<String> deviceNamesList = new ArrayList<>();
-
-    // Permissions launcher
-    private final ActivityResultLauncher<String[]> permissionLauncher =
+    // permissions
+    private final ActivityResultLauncher<String[]> permLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                boolean allGranted = true;
-                for (Boolean granted : result.values()) {
-                    if (!granted) {
-                        allGranted = false;
-                        break;
-                    }
-                }
-                if (allGranted) {
-                    startScan();
-                } else {
-                    statusTextView.setText("Permissions denied. Can't scan or connect.");
-                }
+                boolean all = true;
+                for (Boolean g : result.values()) if (!g) { all = false; break; }
+                if (all) startScan();
+                else statusTextView.setText("Permissions denied");
             });
 
-    @RequiresPermission(allOf = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION})
-    @Nullable
-    @Override
-    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
+    @Nullable @Override
+    public View onCreateView(@NonNull LayoutInflater inflater,
+                             @Nullable ViewGroup container,
                              @Nullable Bundle savedInstanceState) {
-        View view = inflater.inflate(R.layout.fragment_chat, container, false);
-        Bundle args = getArguments();
-        String userName = args != null ? args.getString("userName", "Unknown") : "Unknown";
+        View v = inflater.inflate(R.layout.fragment_chat, container, false);
+        ((AppCompatActivity)requireActivity()).getSupportActionBar().setTitle("iPolluSense Chat");
 
-        ((AppCompatActivity) requireActivity()).getSupportActionBar().setTitle(userName);
-
-        statusTextView = view.findViewById(R.id.statusTextView);
-        messageEditText = view.findViewById(R.id.messageEditText);
-        chatRecyclerView = view.findViewById(R.id.chatRecyclerView);
-        Button scanButton = view.findViewById(R.id.btn_scan);
-        Button connectButton = view.findViewById(R.id.btn_connect);
-        Button disconnectButton = view.findViewById(R.id.btn_disconnect);
-        ImageButton sendButton = view.findViewById(R.id.sendButton);
+        statusTextView  = v.findViewById(R.id.statusTextView);
+        messageEditText = v.findViewById(R.id.messageEditText);
+        chatRecyclerView= v.findViewById(R.id.chatRecyclerView);
+        Button scanBtn      = v.findViewById(R.id.btn_scan);
+        Button connectBtn   = v.findViewById(R.id.btn_connect);
+        Button disconnectBtn= v.findViewById(R.id.btn_disconnect);
+        ImageButton sendBtn = v.findViewById(R.id.sendButton);
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireActivity());
-
         chatAdapter = new ChatAdapter(chatMessages);
         chatRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
         chatRecyclerView.setAdapter(chatAdapter);
-
         rxBleClient = RxBleClient.create(requireContext());
 
-        scanButton.setOnClickListener(v -> checkAndRequestPermissions());
-        connectButton.setOnClickListener(v -> showDeviceSelectionDialog());
-        disconnectButton.setOnClickListener(v -> disconnectFromDevice());
-        sendButton.setOnClickListener(v -> sendMessageWithLocation());
+        scanBtn.setOnClickListener(x -> checkPermissions());
+        connectBtn.setOnClickListener(x -> showDeviceDialog());
+        disconnectBtn.setOnClickListener(x -> disconnect());
+        sendBtn.setOnClickListener(x -> {
+            // Check both FINE and COARSE
+            if (ContextCompat.checkSelfPermission(requireContext(),
+                    Manifest.permission.ACCESS_FINE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED
+                    && ContextCompat.checkSelfPermission(requireContext(),
+                    Manifest.permission.ACCESS_COARSE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED) {
 
-        return view;
+                // We have location permission: go ahead
+                sendMessageWithLocation();
+
+            } else {
+                // No permission: request it via your existing launcher
+                permLauncher.launch(new String[]{
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                });
+            }
+        });
+        return v;
     }
 
-    private void checkAndRequestPermissions() {
-        ArrayList<String> permissionsNeeded = new ArrayList<>();
+    private void checkPermissions() {
+        ArrayList<String> perms = new ArrayList<>();
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
-                != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.BLUETOOTH_SCAN);
-        }
+                != PackageManager.PERMISSION_GRANTED)
+            perms.add(Manifest.permission.BLUETOOTH_SCAN);
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.BLUETOOTH_CONNECT);
-        }
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        }
-
-        if (!permissionsNeeded.isEmpty()) {
-            permissionLauncher.launch(permissionsNeeded.toArray(new String[0]));
-        } else {
-            startScan();
-        }
+                != PackageManager.PERMISSION_GRANTED)
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT);
+        if (!perms.isEmpty()) permLauncher.launch(perms.toArray(new String[0]));
+        else startScan();
     }
 
     private void startScan() {
-        statusTextView.setText("Scanning...");
-        discoveredDevices.clear();
-        deviceNamesList.clear();
+        statusTextView.setText("Scanning…");
+        discovered.clear(); deviceNames.clear();
 
-        Disposable scanDisp = rxBleClient.scanBleDevices()
+        Disposable d = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(scanResult -> {
-                    RxBleDevice device = scanResult.getBleDevice();
-                    String mac = device.getMacAddress();
-                    String name = device.getName() != null ? device.getName() : "Unknown";
-
-                    if (!discoveredDevices.containsKey(mac)) {
-                        discoveredDevices.put(mac, device);
-                        deviceNamesList.add(name + " (" + mac + ")");
-                        statusTextView.setText("Found: " + discoveredDevices.size() + " device(s)");
+                .subscribe(result -> {
+                    RxBleDevice dev = result.getBleDevice();
+                    String mac = dev.getMacAddress();
+                    String name = dev.getName() != null ? dev.getName() : mac;
+                    if (!discovered.containsKey(mac)) {
+                        discovered.put(mac, dev);
+                        deviceNames.add(name + " (" + mac + ")");
+                        statusTextView.setText("Found " + discovered.size());
                     }
                 }, t -> {
-                    statusTextView.setText("Scan failed.");
-                    Log.e(TAG, "Scan failed", t);
+                    statusTextView.setText("Scan failed");
+                    Log.e(TAG, "scan", t);
                 });
-        disposables.add(scanDisp);
+        disposables.add(d);
     }
 
-    private void showDeviceSelectionDialog() {
-        if (discoveredDevices.isEmpty()) {
-            statusTextView.setText("No devices found.");
+    private void showDeviceDialog() {
+        if (discovered.isEmpty()) {
+            statusTextView.setText("No devices");
             return;
         }
-
         new AlertDialog.Builder(requireContext())
-                .setTitle("Select a device")
-                .setItems(deviceNamesList.toArray(new String[0]), (dialog, which) -> {
-                    String selectedText = deviceNamesList.get(which);
-                    String mac = selectedText.substring(selectedText.indexOf('(') + 1, selectedText.indexOf(')'));
-                    selectedDevice = discoveredDevices.get(mac);
-                    statusTextView.setText("Selected: " + selectedText);
-                    connectToDevice();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setTitle("Select device")
+                .setItems(deviceNames.toArray(new String[0]), (dlg, which) -> {
+                    String pick = deviceNames.get(which);
+                    String mac = pick.substring(pick.indexOf('(')+1, pick.indexOf(')'));
+                    selectedDevice = discovered.get(mac);
+                    statusTextView.setText("Selected " + pick);
+                    connect();
+                }).show();
     }
 
-    private void connectToDevice() {
-        if (selectedDevice == null) {
-            statusTextView.setText("No device selected.");
-            return;
-        }
-
-        Disposable connDisp = selectedDevice.establishConnection(false)
+    private void connect() {
+        if (selectedDevice == null) return;
+        Disposable d = selectedDevice.establishConnection(false)
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(rxBleConnection -> {
-                    connection = rxBleConnection;
-                    statusTextView.setText("Connected to: " + selectedDevice.getMacAddress());
-                    subscribeToNotifications();
+                .subscribe(conn -> {
+                    connection = conn;
+                    statusTextView.setText("Connected");
+                    subscribeNotifications();
                 }, t -> {
-                    statusTextView.setText("Connection failed.");
-                    Log.e(TAG, "Connection failed", t);
+                    statusTextView.setText("Connect failed");
+                    Log.e(TAG, "conn", t);
                 });
-        disposables.add(connDisp);
+        disposables.add(d);
     }
 
-    private void subscribeToNotifications() {
-        Disposable notifDisp = connection
+    private void subscribeNotifications() {
+        Disposable d = connection
                 .setupNotification(TX_CHAR_UUID)
                 .flatMap(obs -> obs)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(bytes -> {
-                    String received = new String(bytes, StandardCharsets.UTF_8);
-                    addChatMessage("RX: " + received, false);
-                }, t -> Log.e(TAG, "Notification error", t));
-        disposables.add(notifDisp);
+                    String rx = new String(bytes, StandardCharsets.UTF_8);
+                    addChatMessage("RX: " + rx, false);
+                }, t -> Log.e(TAG, "notif", t));
+        disposables.add(d);
     }
 
-    private void disconnectFromDevice() {
+    private void disconnect() {
         disposables.clear();
         connection = null;
-        selectedDevice = null;
-        statusTextView.setText("Disconnected.");
+        statusTextView.setText("Disconnected");
     }
 
     @RequiresPermission(allOf = {
@@ -230,13 +214,27 @@ public class ChatFragment extends Fragment {
             Manifest.permission.ACCESS_COARSE_LOCATION
     })
     private void sendMessageWithLocation() {
+        // 1) Explicitly check permissions at runtime:
+        if ( ContextCompat.checkSelfPermission(requireContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+                && ContextCompat.checkSelfPermission(requireContext(),
+                Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED ) {
+
+            // Either request them again or bail out with a user‐facing message:
+            Toast.makeText(requireContext(),
+                    "Location permission required to send message",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // 2) Safe to call getLastLocation():
         fusedLocationClient.getLastLocation()
                 .addOnSuccessListener(location -> {
-                    String userText = messageEditText.getText().toString().trim();
+                    String text = messageEditText.getText().toString().trim();
                     StringBuilder sb = new StringBuilder();
-                    if (!TextUtils.isEmpty(userText)) {
-                        sb.append(userText).append("\n");
-                    }
+                    if (!TextUtils.isEmpty(text)) sb.append(text).append("\n");
                     if (location != null) {
                         sb.append("Location: https://www.openstreetmap.org/?mlat=")
                                 .append(location.getLatitude())
@@ -245,38 +243,30 @@ public class ChatFragment extends Fragment {
                     } else {
                         sb.append("Location unavailable");
                     }
-                    String fullMessage = sb.toString();
-                    splitAndSend(fullMessage);
+                    splitAndSend(sb.toString());
                 })
                 .addOnFailureListener(e -> {
                     Log.e(TAG, "Location fetch failed", e);
-                    statusTextView.setText("Could not fetch location.");
-                    String fallback = messageEditText.getText().toString().trim()
-                            + "\nLocation unavailable";
-                    splitAndSend(fallback);
+                    Toast.makeText(requireContext(),
+                            "Could not fetch location", Toast.LENGTH_SHORT).show();
                 });
     }
 
-    private void splitAndSend(String message) {
+    private void splitAndSend(String msg) {
         if (connection == null) {
-            addChatMessage("TX: " + message + " (couldn't send: Not connected)", true);
-            statusTextView.setText("Not connected to device.");
+            addChatMessage("TX: " + msg + " (not connected)", true);
             return;
         }
-
-        addChatMessage("TX: " + message, true);
+        addChatMessage("TX: " + msg, true);
         messageEditText.setText("");
 
-        Disposable mtuDisp = connection
-                .requestMtu(128)
+        Disposable d = connection.requestMtu(CHUNK_SIZE + 3)
                 .flatMapPublisher(mtu -> {
-                    int chunkSize = mtu - 3; // ATT header is 3 bytes
-                    byte[] data = message.getBytes(StandardCharsets.UTF_8);
-
+                    byte[] data = msg.getBytes(StandardCharsets.UTF_8);
                     List<byte[]> chunks = new ArrayList<>();
-                    for (int i = 0; i < data.length; i += chunkSize) {
-                        int len = Math.min(chunkSize, data.length - i);
-                        chunks.add(Arrays.copyOfRange(data, i, i + len));
+                    for (int i=0; i<data.length; i+=CHUNK_SIZE) {
+                        int end = Math.min(data.length, i+CHUNK_SIZE);
+                        chunks.add(Arrays.copyOfRange(data, i, end));
                     }
                     return Flowable.fromIterable(chunks);
                 })
@@ -285,18 +275,19 @@ public class ChatFragment extends Fragment {
                 )
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        bytes -> Log.d(TAG, "Sent chunk, size=" + bytes.length),
+                        b -> Log.d(TAG, "chunk sent"),
                         t -> {
-                            Log.e(TAG, "Fragmented write failed", t);
-                            // Update the last “TX:” message in the chat with the error
-                            updateLastChatMessageWithError(message, t.getMessage());
-                            statusTextView.setText("Send failed: " + t.getMessage());
+                            Log.e(TAG, "send failed", t);
                         }
                 );
-
-        disposables.add(mtuDisp);
+        disposables.add(d);
     }
 
+    private void addChatMessage(String text, boolean isSent) {
+        chatMessages.add(new ChatMessage(text, isSent));
+        chatAdapter.notifyItemInserted(chatMessages.size()-1);
+        chatRecyclerView.scrollToPosition(chatMessages.size()-1);
+    }
     private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
         if (!chatMessages.isEmpty()) {
             ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
@@ -304,18 +295,9 @@ public class ChatFragment extends Fragment {
             chatAdapter.notifyItemChanged(chatMessages.size() - 1);
         }
     }
-
-
-    private void addChatMessage(String text, boolean isSent) {
-        ChatMessage msg = new ChatMessage(text, isSent);
-        chatMessages.add(msg);
-        chatAdapter.notifyItemInserted(chatMessages.size() - 1);
-        chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
-    }
-
-    @Override
-    public void onDestroyView() {
+    @Override public void onDestroyView() {
         super.onDestroyView();
-        disposables.dispose();
+        disposables.clear();
     }
 }
+
