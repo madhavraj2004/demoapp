@@ -37,11 +37,14 @@ import com.polidea.rxandroidble3.RxBleDevice;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
@@ -222,52 +225,76 @@ public class ChatFragment extends Fragment {
         statusTextView.setText("Disconnected.");
     }
 
-    @RequiresPermission(allOf = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION})
+    @RequiresPermission(allOf = {
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+    })
     private void sendMessageWithLocation() {
-        fusedLocationClient.getLastLocation().addOnSuccessListener(location -> {
-            String userText = messageEditText.getText().toString().trim();
-            StringBuilder sb = new StringBuilder();
-            if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
-            if (location != null) {
-                sb.append("Location: https://www.openstreetmap.org/?mlat=")
-                        .append(location.getLatitude())
-                        .append("&mlon=")
-                        .append(location.getLongitude());
-            } else {
-                sb.append("Location unavailable");
-            }
-            sendMessage(sb.toString());
-        }).addOnFailureListener(e -> {
-            Log.e(TAG, "Location fetch failed", e);
-            statusTextView.setText("Could not fetch location.");
-            String userText = messageEditText.getText().toString().trim();
-            StringBuilder sb = new StringBuilder();
-            if (!TextUtils.isEmpty(userText)) sb.append(userText).append("\n");
-            sb.append("Location unavailable");
-            sendMessage(sb.toString());
-        });
+        fusedLocationClient.getLastLocation()
+                .addOnSuccessListener(location -> {
+                    String userText = messageEditText.getText().toString().trim();
+                    StringBuilder sb = new StringBuilder();
+                    if (!TextUtils.isEmpty(userText)) {
+                        sb.append(userText).append("\n");
+                    }
+                    if (location != null) {
+                        sb.append("Location: https://www.openstreetmap.org/?mlat=")
+                                .append(location.getLatitude())
+                                .append("&mlon=")
+                                .append(location.getLongitude());
+                    } else {
+                        sb.append("Location unavailable");
+                    }
+                    String fullMessage = sb.toString();
+                    splitAndSend(fullMessage);
+                })
+                .addOnFailureListener(e -> {
+                    Log.e(TAG, "Location fetch failed", e);
+                    statusTextView.setText("Could not fetch location.");
+                    String fallback = messageEditText.getText().toString().trim()
+                            + "\nLocation unavailable";
+                    splitAndSend(fallback);
+                });
     }
 
-    private void sendMessage(String message) {
+    private void splitAndSend(String message) {
         if (connection == null) {
             addChatMessage("TX: " + message + " (couldn't send: Not connected)", true);
             statusTextView.setText("Not connected to device.");
-        } else {
-            addChatMessage("TX: " + message, true);
-            Disposable writeDisp = connection
-                    .writeCharacteristic(RX_CHAR_UUID, message.getBytes(StandardCharsets.UTF_8))
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(
-                            bytes -> Log.d(TAG, "Sent: " + message),
-                            t -> {
-                                Log.e(TAG, "Write failed", t);
-                                updateLastChatMessageWithError(message, t.getMessage());
-                                statusTextView.setText("Send failed: " + t.getMessage());
-                            }
-                    );
-            disposables.add(writeDisp);
+            return;
         }
+
+        addChatMessage("TX: " + message, true);
         messageEditText.setText("");
+
+        Disposable mtuDisp = connection
+                .requestMtu(128)
+                .flatMapPublisher(mtu -> {
+                    int chunkSize = mtu - 3; // ATT header is 3 bytes
+                    byte[] data = message.getBytes(StandardCharsets.UTF_8);
+
+                    List<byte[]> chunks = new ArrayList<>();
+                    for (int i = 0; i < data.length; i += chunkSize) {
+                        int len = Math.min(chunkSize, data.length - i);
+                        chunks.add(Arrays.copyOfRange(data, i, i + len));
+                    }
+                    return Flowable.fromIterable(chunks);
+                })
+                .concatMap(chunk ->
+                        connection.writeCharacteristic(RX_CHAR_UUID, chunk).toFlowable()
+                )
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(
+                        bytes -> Log.d(TAG, "Sent chunk, size=" + bytes.length),
+                        t -> {
+                            Log.e(TAG, "Fragmented write failed", t);
+                            // Update the last “TX:” message in the chat with the error
+                            updateLastChatMessageWithError(message, t.getMessage());
+                            statusTextView.setText("Send failed: " + t.getMessage());
+                        }
+                );
+
+        disposables.add(mtuDisp);
     }
 
     private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
@@ -277,6 +304,7 @@ public class ChatFragment extends Fragment {
             chatAdapter.notifyItemChanged(chatMessages.size() - 1);
         }
     }
+
 
     private void addChatMessage(String text, boolean isSent) {
         ChatMessage msg = new ChatMessage(text, isSent);

@@ -58,22 +58,12 @@
         <!-- Device List -->
 
         <!-- Received Data -->
-        <TextView
-            android:id="@+id/receivedDataTextView"
-            android:layout_width="match_parent"
-            android:layout_height="122dp"
-            android:layout_marginTop="8dp"
-            android:background="#000000"
-            android:padding="8dp"
-            android:text="No Data"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp" />
 
         <!-- Chat Message List -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/chatRecyclerView"
             android:layout_width="match_parent"
-            android:layout_height="253dp"
+            android:layout_height="393dp"
             android:layout_marginTop="16dp"
             android:clipToPadding="false"
             android:padding="12dp"
@@ -84,7 +74,7 @@
             android:id="@+id/messageLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="40dp"
             android:background="#FFFFFF"
             android:elevation="4dp"
             android:orientation="horizontal"

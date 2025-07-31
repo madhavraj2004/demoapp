@@ -191,4 +191,8 @@ public class BluetoothFragment extends Fragment {
     }
 }
 
+//    <item
+//android:id="@+id/navigation_bluetooth"
+//android:icon="@drawable/ic_notifications_black_24dp"
+//android:title="@string/title_bluetooth" />
 
