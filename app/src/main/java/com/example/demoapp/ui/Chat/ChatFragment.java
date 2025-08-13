@@ -31,9 +31,13 @@ import com.example.demoapp.ChatMessage;
 import com.example.demoapp.R;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationServices;
+
 import com.polidea.rxandroidble3.RxBleClient;
 import com.polidea.rxandroidble3.RxBleConnection;
 import com.polidea.rxandroidble3.RxBleDevice;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -50,11 +54,11 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
 public class ChatFragment extends Fragment {
-    private static final String TAG        = "ChatBluetooth";
-    private static final UUID   SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID   RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final UUID   TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-    private static final int    CHUNK_SIZE   = 125; // MTU–3
+    private static final String TAG = "ChatBluetooth";
+    private static final UUID SERVICE_UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID RX_CHAR_UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID TX_CHAR_UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final int CHUNK_SIZE = 125; // MTU–3
 
     private RxBleClient rxBleClient;
     private RxBleConnection connection;
@@ -78,24 +82,28 @@ public class ChatFragment extends Fragment {
     private final ActivityResultLauncher<String[]> permLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
                 boolean all = true;
-                for (Boolean g : result.values()) if (!g) { all = false; break; }
+                for (Boolean g : result.values()) if (!g) {
+                    all = false;
+                    break;
+                }
                 if (all) startScan();
                 else statusTextView.setText("Permissions denied");
             });
 
-    @Nullable @Override
+    @Nullable
+    @Override
     public View onCreateView(@NonNull LayoutInflater inflater,
                              @Nullable ViewGroup container,
                              @Nullable Bundle savedInstanceState) {
         View v = inflater.inflate(R.layout.fragment_chat, container, false);
-        ((AppCompatActivity)requireActivity()).getSupportActionBar().setTitle("iPolluSense Chat");
+        ((AppCompatActivity) requireActivity()).getSupportActionBar().setTitle("iPolluSense Chat");
 
-        statusTextView   = v.findViewById(R.id.statusTextView);
-        messageEditText  = v.findViewById(R.id.messageEditText);
+        statusTextView = v.findViewById(R.id.statusTextView);
+        messageEditText = v.findViewById(R.id.messageEditText);
         chatRecyclerView = v.findViewById(R.id.chatRecyclerView);
-        Button scanBtn      = v.findViewById(R.id.btn_scan);
-        Button connectBtn   = v.findViewById(R.id.btn_connect);
-        Button disconnectBtn= v.findViewById(R.id.btn_disconnect);
+        Button scanBtn = v.findViewById(R.id.btn_scan);
+        Button connectBtn = v.findViewById(R.id.btn_connect);
+        Button disconnectBtn = v.findViewById(R.id.btn_disconnect);
         ImageButton sendBtn = v.findViewById(R.id.sendButton);
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireActivity());
@@ -141,7 +149,8 @@ public class ChatFragment extends Fragment {
 
     private void startScan() {
         statusTextView.setText("Scanning…");
-        discovered.clear(); deviceNames.clear();
+        discovered.clear();
+        deviceNames.clear();
 
         Disposable d = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
@@ -170,7 +179,7 @@ public class ChatFragment extends Fragment {
                 .setTitle("Select device")
                 .setItems(deviceNames.toArray(new String[0]), (dlg, which) -> {
                     String pick = deviceNames.get(which);
-                    String mac = pick.substring(pick.indexOf('(')+1, pick.indexOf(')'));
+                    String mac = pick.substring(pick.indexOf('(') + 1, pick.indexOf(')'));
                     selectedDevice = discovered.get(mac);
                     statusTextView.setText("Selected " + pick);
                     connect();
@@ -198,17 +207,37 @@ public class ChatFragment extends Fragment {
                 .flatMap(obs -> obs)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(bytes -> {
-                    // accumulate fragments
+                    // Append to buffer
                     incomingBuffer.write(bytes, 0, bytes.length);
-                    // if this chunk is smaller than CHUNK_SIZE, it's the last
-                    if (bytes.length < CHUNK_SIZE) {
-                        String full = new String(incomingBuffer.toByteArray(), StandardCharsets.UTF_8);
-                        addChatMessage("RX: " + full, false);
+
+                    // Convert buffer to string
+                    String currentData = new String(incomingBuffer.toByteArray(), StandardCharsets.UTF_8);
+
+                    // Check if it's complete JSON
+                    if (isCompleteJson(currentData)) {
+                        try {
+                            JSONObject json = new JSONObject(currentData);
+                            addChatMessage("RX: " + json.toString(2), false);
+                        } catch (JSONException e) {
+                            addChatMessage("RX: " + currentData, false);
+                        }
                         incomingBuffer.reset();
                     }
+
                 }, t -> Log.e(TAG, "notif", t));
         disposables.add(d);
     }
+
+    private boolean isCompleteJson(String data) {
+        // Basic bracket matching for JSON objects
+        int braceCount = 0;
+        for (char c : data.toCharArray()) {
+            if (c == '{') braceCount++;
+            else if (c == '}') braceCount--;
+        }
+        return braceCount == 0 && data.trim().endsWith("}");
+    }
+
 
     private void disconnect() {
         disposables.clear();
@@ -234,16 +263,37 @@ public class ChatFragment extends Fragment {
         fusedLocationClient.getLastLocation()
                 .addOnSuccessListener(location -> {
                     String text = messageEditText.getText().toString().trim();
-                    StringBuilder sb = new StringBuilder();
-                    if (!TextUtils.isEmpty(text)) sb.append(text).append("\n");
-                    if (location != null) {
-                        sb.append("Location: https://www.openstreetmap.org/?mlat=")
-                                .append(location.getLatitude())
-                                .append("&mlon=").append(location.getLongitude());
-                    } else {
-                        sb.append("Location unavailable");
+
+                    try {
+                        JSONObject json = new JSONObject();
+                        if (!TextUtils.isEmpty(text)) {
+                            json.put("message", text);
+                        }
+
+                        if (location != null) {
+                            json.put("latitude", location.getLatitude());
+                            json.put("longitude", location.getLongitude());
+                            json.put("location_url", "https://www.openstreetmap.org/?mlat=" +
+                                    location.getLatitude() + "&mlon=" + location.getLongitude());
+                        } else {
+                            json.put("location", "unavailable");
+                        }
+
+                        splitAndSend(json.toString());
+                    } catch (JSONException e) {
+                        Log.e(TAG, "JSON creation failed", e);
+                        // Fallback to plain text if JSON fails
+                        StringBuilder sb = new StringBuilder();
+                        if (!TextUtils.isEmpty(text)) sb.append(text).append("\n");
+                        if (location != null) {
+                            sb.append("Location: https://www.openstreetmap.org/?mlat=")
+                                    .append(location.getLatitude())
+                                    .append("&mlon=").append(location.getLongitude());
+                        } else {
+                            sb.append("Location unavailable");
+                        }
+                        splitAndSend(sb.toString());
                     }
-                    splitAndSend(sb.toString());
                 })
                 .addOnFailureListener(e -> {
                     Log.e(TAG, "Location failed", e);
@@ -253,9 +303,19 @@ public class ChatFragment extends Fragment {
     }
 
     private void splitAndSend(String msg) {
-        if (connection == null) { /* … */ }
+        if (connection == null) {
+            Toast.makeText(requireContext(), "Not connected to any device", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-        addChatMessage("TX: " + msg, true);
+        try {
+            // Pretty print JSON for display if it is JSON
+            JSONObject json = new JSONObject(msg);
+            addChatMessage("TX: " + json.toString(2), true);
+        } catch (JSONException e) {
+            // If not JSON, display as plain text
+            addChatMessage("TX: " + msg, true);
+        }
         messageEditText.setText("");
 
         Disposable d = connection
@@ -284,22 +344,29 @@ public class ChatFragment extends Fragment {
         disposables.add(d);
     }
 
-
     private void addChatMessage(String text, boolean isSent) {
         chatMessages.add(new ChatMessage(text, isSent));
-        chatAdapter.notifyItemInserted(chatMessages.size()-1);
-        chatRecyclerView.scrollToPosition(chatMessages.size()-1);
+        chatAdapter.notifyItemInserted(chatMessages.size() - 1);
+        chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
     }
 
     private void updateLastChatMessageWithError(String fullMessage, String errorMsg) {
         if (!chatMessages.isEmpty()) {
             ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
-            lastMsg.setMessage("TX: " + fullMessage + " (couldn't send: " + errorMsg + ")");
+            try {
+                // Try to parse as JSON for better display
+                JSONObject json = new JSONObject(fullMessage);
+                lastMsg.setMessage("TX: " + json.toString(2) + " (couldn't send: " + errorMsg + ")");
+            } catch (JSONException e) {
+                // If not JSON, display as plain text
+                lastMsg.setMessage("TX: " + fullMessage + " (couldn't send: " + errorMsg + ")");
+            }
             chatAdapter.notifyItemChanged(chatMessages.size() - 1);
         }
     }
 
-    @Override public void onDestroyView() {
+    @Override
+    public void onDestroyView() {
         super.onDestroyView();
         disposables.clear();
     }
