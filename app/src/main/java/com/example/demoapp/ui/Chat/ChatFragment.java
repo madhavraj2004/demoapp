@@ -72,8 +72,18 @@ public class ChatFragment extends Fragment {
 
     private FusedLocationProviderClient fusedLocationClient;
     private final Map<String, RxBleDevice> discovered = new HashMap<>();
-    private final ArrayList<String> deviceNames = new ArrayList<>();
+    private final ArrayList<String> deviceNamesList = new ArrayList<>();
     private RxBleDevice selectedDevice;
+
+    // Group chat variables
+    private String currentGroupId = null;
+    private String currentGroupName = "Default Group";
+    private final Map<String, RxBleDevice> groupMembers = new HashMap<>();
+    private final Map<String, String> deviceNames = new HashMap<>();
+    private Button createGroupBtn;
+    private Button joinGroupBtn;
+    private Button inviteDeviceBtn;
+    private TextView groupInfoTextView;
 
     // Buffer for incoming RX fragments
     private final ByteArrayOutputStream incomingBuffer = new ByteArrayOutputStream();
@@ -106,6 +116,12 @@ public class ChatFragment extends Fragment {
         Button disconnectBtn = v.findViewById(R.id.btn_disconnect);
         ImageButton sendBtn = v.findViewById(R.id.sendButton);
 
+        // Group chat buttons
+        createGroupBtn = v.findViewById(R.id.btn_create_group);
+        joinGroupBtn = v.findViewById(R.id.btn_join_group);
+        inviteDeviceBtn = v.findViewById(R.id.btn_invite_device);
+        groupInfoTextView = v.findViewById(R.id.groupInfoTextView);
+
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireActivity());
         chatAdapter = new ChatAdapter(chatMessages);
         chatRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
@@ -116,14 +132,11 @@ public class ChatFragment extends Fragment {
         connectBtn.setOnClickListener(x -> showDeviceDialog());
         disconnectBtn.setOnClickListener(x -> disconnect());
         sendBtn.setOnClickListener(x -> {
-            // runtime check for location perms
             if (ContextCompat.checkSelfPermission(requireContext(),
                     Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                     && ContextCompat.checkSelfPermission(requireContext(),
                     Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-
                 sendMessageWithLocation();
-
             } else {
                 permLauncher.launch(new String[]{
                         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -131,6 +144,11 @@ public class ChatFragment extends Fragment {
                 });
             }
         });
+
+        // Group chat button listeners
+        createGroupBtn.setOnClickListener(x -> createNewGroup());
+        joinGroupBtn.setOnClickListener(x -> joinGroup());
+        inviteDeviceBtn.setOnClickListener(x -> inviteDeviceToGroup());
 
         return v;
     }
@@ -150,7 +168,7 @@ public class ChatFragment extends Fragment {
     private void startScan() {
         statusTextView.setText("Scanning…");
         discovered.clear();
-        deviceNames.clear();
+        deviceNamesList.clear();
 
         Disposable d = rxBleClient.scanBleDevices()
                 .observeOn(AndroidSchedulers.mainThread())
@@ -160,7 +178,8 @@ public class ChatFragment extends Fragment {
                     String name = dev.getName() != null ? dev.getName() : mac;
                     if (!discovered.containsKey(mac)) {
                         discovered.put(mac, dev);
-                        deviceNames.add(name + " (" + mac + ")");
+                        deviceNamesList.add(name + " (" + mac + ")");
+                        deviceNames.put(mac, name);
                         statusTextView.setText("Found " + discovered.size());
                     }
                 }, t -> {
@@ -177,8 +196,8 @@ public class ChatFragment extends Fragment {
         }
         new AlertDialog.Builder(requireContext())
                 .setTitle("Select device")
-                .setItems(deviceNames.toArray(new String[0]), (dlg, which) -> {
-                    String pick = deviceNames.get(which);
+                .setItems(deviceNamesList.toArray(new String[0]), (dlg, which) -> {
+                    String pick = deviceNamesList.get(which);
                     String mac = pick.substring(pick.indexOf('(') + 1, pick.indexOf(')'));
                     selectedDevice = discovered.get(mac);
                     statusTextView.setText("Selected " + pick);
@@ -207,29 +226,24 @@ public class ChatFragment extends Fragment {
                 .flatMap(obs -> obs)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(bytes -> {
-                    // Append to buffer
                     incomingBuffer.write(bytes, 0, bytes.length);
-
-                    // Convert buffer to string
                     String currentData = new String(incomingBuffer.toByteArray(), StandardCharsets.UTF_8);
 
-                    // Check if it's complete JSON
                     if (isCompleteJson(currentData)) {
                         try {
                             JSONObject json = new JSONObject(currentData);
-                            addChatMessage("RX: " + json.toString(2), false);
+                            handleIncomingMessage(json);
                         } catch (JSONException e) {
-                            addChatMessage("RX: " + currentData, false);
+                            addChatMessage("RX: " + currentData, false, "Unknown", "UNKNOWN",
+                                    currentGroupId != null, currentGroupId);
                         }
                         incomingBuffer.reset();
                     }
-
                 }, t -> Log.e(TAG, "notif", t));
         disposables.add(d);
     }
 
     private boolean isCompleteJson(String data) {
-        // Basic bracket matching for JSON objects
         int braceCount = 0;
         for (char c : data.toCharArray()) {
             if (c == '{') braceCount++;
@@ -238,10 +252,215 @@ public class ChatFragment extends Fragment {
         return braceCount == 0 && data.trim().endsWith("}");
     }
 
+    private void handleIncomingMessage(JSONObject json) {
+        try {
+            String type = json.optString("type", "");
+
+            switch (type) {
+                case "group_create":
+                    handleGroupCreate(json);
+                    break;
+                case "group_join":
+                    handleGroupJoin(json);
+                    break;
+                case "group_invite":
+                    handleGroupInvite(json);
+                    break;
+                case "group_message":
+                    handleGroupMessage(json);
+                    break;
+                default:
+                    String senderMac = json.optString("sender_mac", "Unknown");
+                    String senderName = deviceNames.getOrDefault(senderMac, "Unknown");
+                    String message = json.optString("message", json.toString());
+
+                    addChatMessage(message, false, senderName, senderMac,
+                            currentGroupId != null, currentGroupId);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error handling incoming message", e);
+            addChatMessage("RX: " + json.toString(), false, "Unknown", "UNKNOWN",
+                    currentGroupId != null, currentGroupId);
+        }
+    }
+
+    private void createNewGroup() {
+        if (connection == null) {
+            Toast.makeText(requireContext(), "Not connected to any device", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        currentGroupId = UUID.randomUUID().toString().substring(0, 8);
+        currentGroupName = "Group " + currentGroupId;
+
+        groupMembers.clear();
+        groupMembers.put("SELF", null);
+        deviceNames.put("SELF", "Me");
+
+        updateGroupUI();
+
+        JSONObject groupInfo = new JSONObject();
+        try {
+            groupInfo.put("type", "group_create");
+            groupInfo.put("group_id", currentGroupId);
+            groupInfo.put("group_name", currentGroupName);
+            groupInfo.put("creator", "SELF");
+            sendJsonMessage(groupInfo);
+
+            addChatMessage("Group created: " + currentGroupName, false, "System", "SYSTEM", false, "");
+        } catch (JSONException e) {
+            Log.e(TAG, "Failed to create group message", e);
+        }
+    }
+
+    private void joinGroup() {
+        EditText input = new EditText(requireContext());
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Join Group")
+                .setMessage("Enter Group ID:")
+                .setView(input)
+                .setPositiveButton("Join", (dialog, which) -> {
+                    String groupId = input.getText().toString().trim();
+                    if (!groupId.isEmpty()) {
+                        joinExistingGroup(groupId);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void joinExistingGroup(String groupId) {
+        currentGroupId = groupId;
+        currentGroupName = "Group " + groupId;
+
+        JSONObject joinMessage = new JSONObject();
+        try {
+            joinMessage.put("type", "group_join");
+            joinMessage.put("group_id", currentGroupId);
+            joinMessage.put("device_mac", "SELF");
+            joinMessage.put("device_name", "Me");
+            sendJsonMessage(joinMessage);
+
+            addChatMessage("Joined group: " + currentGroupName, false, "System", "SYSTEM", false, "");
+        } catch (JSONException e) {
+            Log.e(TAG, "Failed to create join message", e);
+        }
+
+        updateGroupUI();
+    }
+
+    private void inviteDeviceToGroup() {
+        if (currentGroupId == null) {
+            Toast.makeText(requireContext(), "Create or join a group first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (deviceNamesList.isEmpty()) {
+            Toast.makeText(requireContext(), "No devices found", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Invite Device to Group")
+                .setItems(deviceNamesList.toArray(new String[0]), (dlg, which) -> {
+                    String pick = deviceNamesList.get(which);
+                    String mac = pick.substring(pick.indexOf('(') + 1, pick.indexOf(')'));
+
+                    JSONObject inviteMessage = new JSONObject();
+                    try {
+                        inviteMessage.put("type", "group_invite");
+                        inviteMessage.put("group_id", currentGroupId);
+                        inviteMessage.put("group_name", currentGroupName);
+                        sendJsonMessage(inviteMessage);
+
+                        addChatMessage("Invitation sent to " + deviceNames.get(mac), false,
+                                "System", "SYSTEM", false, "");
+                    } catch (JSONException e) {
+                        Log.e(TAG, "Failed to create invite message", e);
+                    }
+                }).show();
+    }
+
+    private void updateGroupUI() {
+        if (currentGroupId != null) {
+            groupInfoTextView.setText("Group: " + currentGroupName + " (" +
+                    groupMembers.size() + " members)");
+            groupInfoTextView.setVisibility(View.VISIBLE);
+        } else {
+            groupInfoTextView.setVisibility(View.GONE);
+        }
+    }
+
+    private void handleGroupCreate(JSONObject json) {
+        String groupId = json.optString("group_id");
+        String groupName = json.optString("group_name", "Group " + groupId);
+        String creator = json.optString("creator");
+
+        currentGroupId = groupId;
+        currentGroupName = groupName;
+        groupMembers.put(creator, null);
+
+        updateGroupUI();
+        addChatMessage("Group created: " + groupName, false, "System", "SYSTEM", true, groupId);
+    }
+
+    private void handleGroupJoin(JSONObject json) {
+        String deviceMac = json.optString("device_mac");
+        String deviceName = json.optString("device_name", deviceMac);
+
+        groupMembers.put(deviceMac, null);
+        deviceNames.put(deviceMac, deviceName);
+
+        updateGroupUI();
+        addChatMessage(deviceName + " joined the group", false, "System", "SYSTEM", true, currentGroupId);
+    }
+
+    private void handleGroupInvite(JSONObject json) {
+        String groupId = json.optString("group_id");
+        String groupName = json.optString("group_name", "Group " + groupId);
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Group Invitation")
+                .setMessage("Join group: " + groupName + "?")
+                .setPositiveButton("Join", (dialog, which) -> joinExistingGroup(groupId))
+                .setNegativeButton("Decline", null)
+                .show();
+    }
+
+    private void handleGroupMessage(JSONObject json) {
+        String senderMac = json.optString("sender_mac");
+        String senderName = deviceNames.getOrDefault(senderMac, "Unknown");
+        String message = json.optString("message");
+
+        addChatMessage(message, false, senderName, senderMac, true, currentGroupId);
+    }
+
+    private void sendJsonMessage(JSONObject json) {
+        try {
+            // Always include sender information
+            json.put("sender_mac", "SELF");
+            json.put("sender_name", "Me");
+
+            // Include group info if in a group
+            if (currentGroupId != null) {
+                json.put("group_id", currentGroupId);
+                json.put("type", "group_message");
+            }
+
+            splitAndSend(json.toString());
+        } catch (JSONException e) {
+            Log.e(TAG, "Failed to add sender info to message", e);
+            // Fallback: just send the original message
+            splitAndSend(json.toString());
+        }
+    }
 
     private void disconnect() {
         disposables.clear();
         connection = null;
+        currentGroupId = null;
+        groupMembers.clear();
+        updateGroupUI();
         statusTextView.setText("Disconnected");
     }
 
@@ -250,7 +469,6 @@ public class ChatFragment extends Fragment {
             Manifest.permission.ACCESS_COARSE_LOCATION
     })
     private void sendMessageWithLocation() {
-        // final safety check
         if (ContextCompat.checkSelfPermission(requireContext(),
                 Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 || ContextCompat.checkSelfPermission(requireContext(),
@@ -279,10 +497,9 @@ public class ChatFragment extends Fragment {
                             json.put("location", "unavailable");
                         }
 
-                        splitAndSend(json.toString());
+                        sendJsonMessage(json);
                     } catch (JSONException e) {
                         Log.e(TAG, "JSON creation failed", e);
-                        // Fallback to plain text if JSON fails
                         StringBuilder sb = new StringBuilder();
                         if (!TextUtils.isEmpty(text)) sb.append(text).append("\n");
                         if (location != null) {
@@ -309,17 +526,17 @@ public class ChatFragment extends Fragment {
         }
 
         try {
-            // Pretty print JSON for display if it is JSON
             JSONObject json = new JSONObject(msg);
-            addChatMessage("TX: " + json.toString(2), true);
+            String displayText = "TX: " + json.toString(2);
+            addChatMessage(displayText, true, "Me", "SELF",
+                    currentGroupId != null, currentGroupId);
         } catch (JSONException e) {
-            // If not JSON, display as plain text
-            addChatMessage("TX: " + msg, true);
+            addChatMessage("TX: " + msg, true, "Me", "SELF",
+                    currentGroupId != null, currentGroupId);
         }
         messageEditText.setText("");
 
         Disposable d = connection
-                // ← force 128‐byte MTU so each write fragment is ≤125 bytes
                 .requestMtu(128)
                 .flatMapPublisher(mtu -> {
                     byte[] data = msg.getBytes(StandardCharsets.UTF_8);
@@ -344,8 +561,9 @@ public class ChatFragment extends Fragment {
         disposables.add(d);
     }
 
-    private void addChatMessage(String text, boolean isSent) {
-        chatMessages.add(new ChatMessage(text, isSent));
+    private void addChatMessage(String text, boolean isSent, String senderName,
+                                String senderMac, boolean isGroupMessage, String groupId) {
+        chatMessages.add(new ChatMessage(text, isSent, senderName, senderMac, isGroupMessage, groupId));
         chatAdapter.notifyItemInserted(chatMessages.size() - 1);
         chatRecyclerView.scrollToPosition(chatMessages.size() - 1);
     }
@@ -354,11 +572,9 @@ public class ChatFragment extends Fragment {
         if (!chatMessages.isEmpty()) {
             ChatMessage lastMsg = chatMessages.get(chatMessages.size() - 1);
             try {
-                // Try to parse as JSON for better display
                 JSONObject json = new JSONObject(fullMessage);
                 lastMsg.setMessage("TX: " + json.toString(2) + " (couldn't send: " + errorMsg + ")");
             } catch (JSONException e) {
-                // If not JSON, display as plain text
                 lastMsg.setMessage("TX: " + fullMessage + " (couldn't send: " + errorMsg + ")");
             }
             chatAdapter.notifyItemChanged(chatMessages.size() - 1);
